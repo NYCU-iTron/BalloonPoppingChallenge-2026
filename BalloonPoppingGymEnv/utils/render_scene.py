@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 _state = {"fig": None, "ax": None, "art": None, "trail": [], "view": None}
@@ -19,16 +20,35 @@ def reset_scene():
 def _init_artists(ax):
     art = {}
     art["rocket"] = ax.scatter([], [], [], c="blue", marker="^", s=90,
-                               depthshade=False, label="Rocket")
+                               depthshade=False)
     art["target"] = ax.scatter([], [], [], facecolors="none", edgecolors="red",
-                               marker="o", s=200, linewidths=2.0, depthshade=False, label="Target")
+                               marker="o", s=200, linewidths=2.0, depthshade=False)
     (art["los"],)   = ax.plot([], [], [], color="gold", ls="--", lw=1.5)
     (art["trail"],) = ax.plot([], [], [], color="navy", lw=1.0, alpha=0.5)
     (art["nose"],)  = ax.plot([], [], [], color="blue", lw=2.0)
     art["txt"] = ax.text2D(0.02, 0.98, "", transform=ax.transAxes, va="top", fontsize=9)
     ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
     ax.set_box_aspect((1, 1, 1))          # 立方體比例:角度/距離不失真
-    ax.legend(loc="upper left", fontsize=8)
+    legend_handles = [
+        Line2D([0], [0], color="none", marker="^", markerfacecolor="blue",
+               markeredgecolor="blue", markersize=9, label="Rocket"),
+        Line2D([0], [0], color="none", marker="o", markerfacecolor="none",
+               markeredgecolor="red", markeredgewidth=2, markersize=10,
+               label="Target"),
+        Line2D([0], [0], color="gold", linestyle="--", linewidth=1.5,
+               label="Line of sight"),
+        Line2D([0], [0], color="navy", linewidth=1.0, alpha=0.5,
+               label="Rocket trail"),
+        Line2D([0], [0], color="blue", linewidth=2.0, label="Nose direction"),
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="lower left",
+        bbox_to_anchor=(1.02, 0.02),
+        borderaxespad=0.0,
+        fontsize=8,
+        frameon=True,
+    )
     return art
 
 
@@ -60,7 +80,8 @@ def render_scene(observation, rocket_state, balloon_state=None,
                  show=True, arrow_length=12.0, trail_length=400,
                  margin=20.0, min_half=25.0):
     if _state["fig"] is None or not plt.fignum_exists(_state["fig"].number):
-        fig = plt.figure(figsize=(7, 7))
+        fig = plt.figure(figsize=(8.8, 7))
+        fig.subplots_adjust(right=0.78)
         ax = fig.add_subplot(projection="3d")
         _state.update(fig=fig, ax=ax, art=_init_artists(ax), view=None)
         if show:

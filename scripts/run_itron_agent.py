@@ -35,29 +35,38 @@ def run_for_development():
 
         print(f"simulation_time: {observation['simulation_time']:.2f} sec, reward: {info['popped_count']:.2f}", end='\r')
 
-    plt.subplot(2, 1, 1)
-    plt.plot(time, angular_rates[0], 'r-', label='x_rate')
-    plt.plot(time, angular_rates[1], 'g-', label='y_rate')
-    plt.plot(time, angular_rates[2], 'b-', label='z_rate')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Angular Rates (rad/s)')
-    plt.xlim(0, 30)
-    plt.ylim(-0.1, 0.1)
-    plt.legend()
+    fig, (rate_ax, tvc_ax) = plt.subplots(2, 1, figsize=(9, 6), constrained_layout=True)
+    rate_ax.plot(time, angular_rates[0], 'r-', label='x_rate')
+    rate_ax.plot(time, angular_rates[1], 'g-', label='y_rate')
+    rate_ax.plot(time, angular_rates[2], 'b-', label='z_rate')
+    rate_ax.set_xlabel('Time (s)')
+    rate_ax.set_ylabel('Angular Rates (rad/s)')
+    rate_ax.set_xlim(0, 30)
+    rate_ax.set_ylim(-0.1, 0.1)
+    rate_ax.legend(
+        loc='center left',
+        bbox_to_anchor=(1.02, 0.5),
+        borderaxespad=0.0,
+        frameon=True,
+    )
 
     # TVC controller observed variables are tuples: (time, gimbal_x, gimbal_y)
     tvc = env._rocket_flight.rocket._controllers[0].observed_variables
     tvc_array = np.array(tvc, dtype=float)
-    plt.subplot(2, 1, 2)
-    plt.plot(tvc_array[:, 0], tvc_array[:, 1], 'r-', label='tvc_x')
-    plt.plot(tvc_array[:, 0], tvc_array[:, 2], 'b-', label='tvc_y')
-    plt.xlabel('Time (s)')
-    plt.ylabel('TVC Gimbal Angle (deg)')
-    plt.xlim(0, 30)
-    plt.ylim(-0.1, 0.1)
-    plt.legend()
+    tvc_ax.plot(tvc_array[:, 0], tvc_array[:, 1], 'r-', label='tvc_x')
+    tvc_ax.plot(tvc_array[:, 0], tvc_array[:, 2], 'b-', label='tvc_y')
+    tvc_ax.set_xlabel('Time (s)')
+    tvc_ax.set_ylabel('TVC Gimbal Angle (deg)')
+    tvc_ax.set_xlim(0, 30)
+    tvc_ax.set_ylim(-0.1, 0.1)
+    tvc_ax.legend(
+        loc='center left',
+        bbox_to_anchor=(1.02, 0.5),
+        borderaxespad=0.0,
+        frameon=True,
+    )
 
-    plt.tight_layout()
+    fig.set_constrained_layout_pads(w_pad=0.04, h_pad=0.04, hspace=0.08)
     plt.show()
 
     print(f"Scenario {scenario_number} evaluation completed.")

@@ -233,7 +233,7 @@ class BalloonPoppingEnv(gym.Env):
             "rocket_states": self._rocket_states.copy().tolist(),
             "balloon_states": self._balloon_states.copy().tolist(),
             "balloon_status": self._balloon_status[:, 0].tolist(),
-        }        
+        }
         if self.trajectories is None:
             self.trajectories = [step_record]
         else:
