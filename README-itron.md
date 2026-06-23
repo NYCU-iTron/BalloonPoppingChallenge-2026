@@ -14,6 +14,12 @@ git submodule update --init
 uv sync
 ```
 
+## Usage
+
+```sh
+uv run scripts/run_itron_agent.py
+```
+
 ## Architecture
 
 ## Timeline
