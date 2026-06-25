@@ -37,40 +37,6 @@ def run_for_development():
 
     render_scene.draw()
 
-    error_buffer = agent.estimator.error_buffer
-
-    if len(error_buffer) > 0:
-        error_list = list(error_buffer)
-        mean_error = float(np.mean(error_list))
-
-        plt.figure(figsize=(10, 5))
-        plt.plot(
-            error_list,
-            color="darkmagenta",
-            linestyle="-",
-            marker="o",
-            markersize=3,
-            alpha=0.7,
-            label="Settled Error Rate"
-        )
-        plt.axhline(
-            y=mean_error,
-            color="crimson",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Session Mean: {mean_error:.3f} m/s"
-        )
-
-        plt.title("Post-Flight Global Prediction Error Analysis", fontsize=12, fontweight="bold")
-        plt.xlabel("Sequential Settled Sample Index")
-        plt.ylabel("Normalized Position Error Rate [m/s]")
-        plt.legend(loc="upper right")
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-        plt.show()
-    else:
-        print("\n[Diagnostics Warning] Global error buffer is empty. No predictions reached expiration.")
-
 if __name__ == "__main__":
     setup_logging()
     run_for_development()
