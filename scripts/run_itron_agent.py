@@ -1,12 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.itron_agent import ITronAgent
 from BalloonPoppingGymEnv.utils.setup_logging import setup_logging
 from BalloonPoppingGymEnv.utils.render_scene import RenderScene
 
-scenario_number = 0
+scenario_number = 2
 
 def run_for_development():
 
@@ -25,9 +25,6 @@ def run_for_development():
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
 
-    angular_rates = np.full((3, 1), np.nan)
-    time = np.full(1, np.nan)
-
     while not terminated:
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
@@ -39,6 +36,40 @@ def run_for_development():
             break
 
     render_scene.draw()
+
+    error_buffer = agent.estimator.error_buffer
+
+    if len(error_buffer) > 0:
+        error_list = list(error_buffer)
+        mean_error = float(np.mean(error_list))
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(
+            error_list,
+            color="darkmagenta",
+            linestyle="-",
+            marker="o",
+            markersize=3,
+            alpha=0.7,
+            label="Settled Error Rate"
+        )
+        plt.axhline(
+            y=mean_error,
+            color="crimson",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Session Mean: {mean_error:.3f} m/s"
+        )
+
+        plt.title("Post-Flight Global Prediction Error Analysis", fontsize=12, fontweight="bold")
+        plt.xlabel("Sequential Settled Sample Index")
+        plt.ylabel("Normalized Position Error Rate [m/s]")
+        plt.legend(loc="upper right")
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("\n[Diagnostics Warning] Global error buffer is empty. No predictions reached expiration.")
 
 if __name__ == "__main__":
     setup_logging()
