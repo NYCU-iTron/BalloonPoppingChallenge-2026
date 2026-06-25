@@ -1,117 +1,173 @@
-import matplotlib.pyplot as plt
+"""Collect per-step states during a rollout and draw the 3D trajectories.
+
+Usage
+-----
+    from render_scene import RenderScene
+
+    render_scene = RenderScene()
+    observation, info = env.reset(seed=...)
+    render_scene.get_ob(observation, info)        # optional: capture t = 0
+
+    terminated = False
+    while not terminated:
+        action = agent.get_action(observation)
+        observation, reward, terminated, _, info = env.step(action)
+        render_scene.get_ob(observation, info)    # store each step
+
+    render_scene.draw()                           # plot after the loop
+
+Balloon positions/status come from ``observation`` (``balloon_states`` /
+``balloon_status``); the rocket trajectory comes from ``info["rocket_states"]``.
+"""
+
 import numpy as np
-
-_state = {"fig": None, "ax": None, "art": None, "trail": [], "view": None}
-
-
-def _quat_rotate(quat, vec):
-    qw, qx, qy, qz = quat
-    qv = np.array([qx, qy, qz])
-    t = 2.0 * np.cross(qv, vec)
-    return vec + qw * t + np.cross(qv, t)
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
-def reset_scene():
-    _state["trail"] = []
-    _state["view"] = None
+class RenderScene:
+    """Accumulate observation/info frames and render them as 3D trajectories."""
 
+    # status code -> colour, matching the env's render conventions
+    STATUS_COLORS = {0: "grey", 1: "magenta", 2: "red"}
+    STATUS_LABELS = {0: "Balloon (ground)", 1: "Balloon (released)", 2: "Balloon (popped)"}
 
-def _init_artists(ax):
-    art = {}
-    art["rocket"] = ax.scatter([], [], [], c="blue", marker="^", s=90,
-                               depthshade=False, label="Rocket")
-    art["target"] = ax.scatter([], [], [], facecolors="none", edgecolors="red",
-                               marker="o", s=200, linewidths=2.0, depthshade=False, label="Target")
-    (art["los"],)   = ax.plot([], [], [], color="gold", ls="--", lw=1.5)
-    (art["trail"],) = ax.plot([], [], [], color="navy", lw=1.0, alpha=0.5)
-    (art["nose"],)  = ax.plot([], [], [], color="blue", lw=2.0)
-    art["txt"] = ax.text2D(0.02, 0.98, "", transform=ax.transAxes, va="top", fontsize=9)
-    ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
-    ax.set_box_aspect((1, 1, 1))          # 立方體比例:角度/距離不失真
-    ax.legend(loc="upper left", fontsize=8)
-    return art
+    def __init__(self):
+        # one entry appended per get_ob() call
+        self.times = []              # list of float
+        self.balloon_positions = []  # list of (num, 3) arrays
+        self.balloon_status = []     # list of (num,) int arrays
+        self.rocket_positions = []   # list of (3,) arrays (NaN before launch)
 
+    def get_ob(self, observation, info=None):
+        """Store one frame of balloon (from observation) and rocket (from info) state.
 
-def _set3d(scat, pt):
-    scat._offsets3d = ([], [], []) if pt is None else ([pt[0]], [pt[1]], [pt[2]])
+        Parameters
+        ----------
+        observation : dict
+            Env observation. Uses ``balloon_states`` (num, 6) and
+            ``balloon_status`` (num, 1); optionally ``simulation_time``.
+        info : dict, optional
+            Env info. Uses ``rocket_states`` (13,) whose first three entries are
+            the rocket position. If omitted, the rocket position is recorded as
+            NaN for this frame.
+        """
+        # simulation time (fall back to a running index if not present)
+        sim_time = observation.get("simulation_time", len(self.times))
+        self.times.append(float(np.asarray(sim_time).item()))
 
+        # balloon positions: (num, 6) -> keep x, y, z
+        balloon_states = np.asarray(observation["balloon_states"], dtype=float)
+        self.balloon_positions.append(balloon_states[:, :3].copy())
 
-def _update_view(ax, focus, margin, min_half):
-    """只框住 focus(火箭+目標),維持立方體;有遲滯,只在內容跑出框時才重設。"""
-    lo, hi = focus.min(axis=0), focus.max(axis=0)
-    c = (lo + hi) / 2.0
-    half = max((hi - lo).max() / 2.0 + margin, min_half)   # 立方體半邊長,有下限
+        # balloon status: (num, 1) -> (num,)
+        status = np.asarray(observation["balloon_status"], dtype=int).reshape(-1)
+        self.balloon_status.append(status.copy())
 
-    v = _state["view"]
-    if v is not None:
-        cc, ch = v
-        inside  = np.all(np.abs(focus - cc) <= ch)         # 內容還在現有框內?
-        too_big = ch > half * 2.0                          # 框比需要大太多?
-        if inside and not too_big:
-            return                                         # 不動 → 最快路徑,不觸發 3D 重畫
+        # rocket position from info["rocket_states"][:3]; NaN if unavailable
+        rocket_pos = np.full(3, np.nan)
+        if info is not None and info.get("rocket_states") is not None:
+            rocket_states = np.asarray(info["rocket_states"], dtype=float)
+            if rocket_states.size >= 3:
+                rocket_pos = rocket_states[:3].copy()
+        self.rocket_positions.append(rocket_pos)
 
-    _state["view"] = (c, half)
-    ax.set_xlim(c[0] - half, c[0] + half)
-    ax.set_ylim(c[1] - half, c[1] + half)
-    ax.set_zlim(c[2] - half, c[2] + half)
+    def draw(self, show=True, save_path=None, ax=None, equal_aspect=False):
+        """Plot the collected balloon and rocket trajectories in 3D.
 
+        Parameters
+        ----------
+        show : bool
+            Call ``plt.show()`` when done.
+        save_path : str, optional
+            If given, save the figure to this path.
+        ax : mpl_toolkits.mplot3d.axes3d.Axes3D, optional
+            Draw into an existing 3D axis instead of creating a new figure.
+        equal_aspect : bool
+            If True, scale the three axes to the true data ranges (1:1:1). This
+            is physically faithful but, when altitude dwarfs the horizontal
+            spread, produces a thin sliver. Default False lets matplotlib
+            auto-scale each axis for readability.
 
-def render_scene(observation, rocket_state, balloon_state=None,
-                 show=True, arrow_length=12.0, trail_length=400,
-                 margin=20.0, min_half=25.0):
-    if _state["fig"] is None or not plt.fignum_exists(_state["fig"].number):
-        fig = plt.figure(figsize=(7, 7))
-        ax = fig.add_subplot(projection="3d")
-        _state.update(fig=fig, ax=ax, art=_init_artists(ax), view=None)
+        Returns
+        -------
+        ax : the 3D axis the scene was drawn on.
+        """
+        if not self.times:
+            raise RuntimeError(
+                "No frames recorded. Call get_ob() inside the loop before draw()."
+            )
+
+        balloon_traj = np.stack(self.balloon_positions, axis=0)  # (T, num, 3)
+        status_traj = np.stack(self.balloon_status, axis=0)      # (T, num)
+        rocket_traj = np.stack(self.rocket_positions, axis=0)    # (T, 3)
+        _, num_balloons, _ = balloon_traj.shape
+
+        if ax is None:
+            fig = plt.figure(figsize=(10, 8))
+            ax = fig.add_subplot(projection="3d")
+
+        # --- balloons: faint path + final position coloured by final status ---
+        for b in range(num_balloons):
+            xs, ys, zs = balloon_traj[:, b, 0], balloon_traj[:, b, 1], balloon_traj[:, b, 2]
+            # path is only meaningful if the balloon actually moves
+            if np.ptp(xs) + np.ptp(ys) + np.ptp(zs) > 1e-6:
+                ax.plot(xs, ys, zs, color="orchid", linewidth=1.0, alpha=0.6)
+            final_status = int(status_traj[-1, b])
+            ax.scatter(
+                xs[-1], ys[-1], zs[-1],
+                color=self.STATUS_COLORS.get(final_status, "magenta"),
+                s=45, edgecolor="black", linewidth=0.4, depthshade=True,
+            )
+
+        # --- rocket: drop pre-launch NaN frames, then draw the path ---
+        valid = ~np.isnan(rocket_traj).any(axis=1)
+        if valid.any():
+            rx, ry, rz = rocket_traj[valid, 0], rocket_traj[valid, 1], rocket_traj[valid, 2]
+            ax.plot(rx, ry, rz, color="blue", linewidth=2.0)
+            ax.scatter(rx[0], ry[0], rz[0], color="green", marker="^", s=70,
+                       edgecolor="black", linewidth=0.4)
+            ax.scatter(rx[-1], ry[-1], rz[-1], color="navy", marker="s", s=60,
+                       edgecolor="black", linewidth=0.4)
+
+        # --- optional 1:1:1 scaling using data ranges ---
+        if equal_aspect:
+            all_pts = balloon_traj.reshape(-1, 3)
+            if valid.any():
+                all_pts = np.vstack([all_pts, rocket_traj[valid]])
+            finite = all_pts[np.isfinite(all_pts).all(axis=1)]
+            if finite.size:
+                ranges = np.ptp(finite, axis=0)
+                ranges = np.where(ranges < 1e-6, 1.0, ranges)
+                ax.set_box_aspect(ranges)
+
+        ax.set_xlabel("X / East (m)")
+        ax.set_ylabel("Y / North (m)")
+        ax.set_zlabel("Z / Up (m)")
+        ax.set_title("Balloon & Rocket Trajectories")
+
+        # --- legend (proxy handles for status colours + rocket markers) ---
+        present_status = sorted(set(int(s) for s in status_traj[-1]))
+        legend_handles = [Line2D([0], [0], color="orchid", lw=1.5, label="Balloon path")]
+        for s in present_status:
+            legend_handles.append(
+                Line2D([0], [0], marker="o", color="w",
+                       markerfacecolor=self.STATUS_COLORS.get(s, "magenta"),
+                       markeredgecolor="black", markersize=8,
+                       label=self.STATUS_LABELS.get(s, f"Balloon ({s})"))
+            )
+        if valid.any():
+            legend_handles += [
+                Line2D([0], [0], color="blue", lw=2, label="Rocket path"),
+                Line2D([0], [0], marker="^", color="w", markerfacecolor="green",
+                       markeredgecolor="black", markersize=10, label="Launch"),
+                Line2D([0], [0], marker="s", color="w", markerfacecolor="navy",
+                       markeredgecolor="black", markersize=9, label="Rocket end"),
+            ]
+        ax.legend(handles=legend_handles, loc="upper left", fontsize=8)
+
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
         if show:
-            plt.show(block=False)
-    ax, art = _state["ax"], _state["art"]
-
-    rs = np.asarray(rocket_state, dtype=float)
-    rpos, rquat = rs[:3], rs[6:10]
-    rvalid = np.isfinite(rpos).all()
-
-    tpos = None
-    if balloon_state is not None:
-        bs = np.asarray(balloon_state, dtype=float)
-        if np.isfinite(bs[:3]).all():
-            tpos = bs[:3]
-
-    # 火箭 + 軌跡 + 機頭
-    if rvalid:
-        _set3d(art["rocket"], rpos)
-        _state["trail"].append(rpos.copy())
-        if len(_state["trail"]) > trail_length:
-            _state["trail"].pop(0)
-        tr = np.asarray(_state["trail"])
-        art["trail"].set_data_3d(tr[:, 0], tr[:, 1], tr[:, 2])
-        if np.isfinite(rquat).all() and np.linalg.norm(rquat) > 1e-6:
-            nose = _quat_rotate(rquat, np.array([0.0, 0.0, 1.0]))
-            nose = nose / (np.linalg.norm(nose) + 1e-12) * arrow_length
-            tip = rpos + nose
-            art["nose"].set_data_3d([rpos[0], tip[0]], [rpos[1], tip[1]], [rpos[2], tip[2]])
-    else:
-        _set3d(art["rocket"], None)
-
-    # 目標 + LOS + 距離文字
-    if tpos is not None:
-        _set3d(art["target"], tpos)
-        if rvalid:
-            art["los"].set_data_3d([rpos[0], tpos[0]], [rpos[1], tpos[1]], [rpos[2], tpos[2]])
-            art["txt"].set_text(f"dist {np.linalg.norm(tpos - rpos):6.1f} m")
-        else:
-            art["los"].set_data_3d([], [], [])
-    else:
-        _set3d(art["target"], None)
-        art["los"].set_data_3d([], [], [])
-        art["txt"].set_text("no target")
-
-    # 顯示範圍最佳化:只看 火箭+目標
-    focus = [p for p in (rpos if rvalid else None, tpos) if p is not None]
-    if focus:
-        _update_view(ax, np.array(focus), margin, min_half)
-
-    if show:
-        _state["fig"].canvas.draw_idle()
-        _state["fig"].canvas.flush_events()
-    return ax
+            plt.show()
+        return ax

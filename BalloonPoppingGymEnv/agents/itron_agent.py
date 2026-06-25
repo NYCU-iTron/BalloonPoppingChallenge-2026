@@ -4,7 +4,6 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.render_scene import render_scene
 from BalloonPoppingGymEnv.utils.schema import Schema
 
 
@@ -57,8 +56,6 @@ class ITronAgent(BaseAgent):
         t = observation[Schema.Observation.SIMULATION_TIME]
         is_launched = t >= self.selector.get_launch_time(observation)
         launch_inclination_heading = self.selector.get_launch_heading(observation)
-
-        render_scene(observation, rocket_state, balloon_state)
 
         return {
             "launch": is_launched,
