@@ -4,7 +4,6 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.render_scene import render_scene
 from BalloonPoppingGymEnv.utils.schema import Schema
 
 
@@ -48,17 +47,19 @@ class ITronAgent(BaseAgent):
         self.controller.reset()
 
     def get_action(self, observation: dict) -> dict:
-        rocket_state = self.estimator.update(observation)
-        balloon_state = self.selector.select(observation, rocket_state)
-        desired_rates, desired_throttle = self.navigator.compute(balloon_state, rocket_state)
-        tvc, roll, throttle = self.controller.compute(observation, desired_rates, desired_throttle)
+        rocket_state = self.estimator.update_rocket_state(observation)
+        balloon_states = self.estimator.predict_balloons(observation)
+
+        target_idx = self.selector.select(balloon_states, rocket_state)
+        target_pos = self.estimator.predict_target(observation, target_idx)
+
+        desired_rates, desired_throttle = self.navigator.compute(target_pos, rocket_state)
+        tvc, roll, throttle = self.controller.compute(rocket_state, desired_rates, desired_throttle)
 
         # Set launch parameters
         t = observation[Schema.Observation.SIMULATION_TIME]
         is_launched = t >= self.selector.get_launch_time(observation)
         launch_inclination_heading = self.selector.get_launch_heading(observation)
-
-        render_scene(observation, rocket_state, balloon_state)
 
         return {
             "launch": is_launched,
