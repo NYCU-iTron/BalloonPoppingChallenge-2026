@@ -47,10 +47,14 @@ class ITronAgent(BaseAgent):
         self.controller.reset()
 
     def get_action(self, observation: dict) -> dict:
-        rocket_state = self.estimator.update(observation)
-        balloon_state = self.selector.select(observation, rocket_state)
-        desired_rates, desired_throttle = self.navigator.compute(balloon_state, rocket_state)
-        tvc, roll, throttle = self.controller.compute(observation, desired_rates, desired_throttle)
+        rocket_state = self.estimator.update_rocket_state(observation)
+        balloon_states = self.estimator.predict_balloons(observation)
+
+        target_idx = self.selector.select(balloon_states, rocket_state)
+        target_pos = self.estimator.predict_target(observation, target_idx)
+
+        desired_rates, desired_throttle = self.navigator.compute(target_pos, rocket_state)
+        tvc, roll, throttle = self.controller.compute(rocket_state, desired_rates, desired_throttle)
 
         # Set launch parameters
         t = observation[Schema.Observation.SIMULATION_TIME]
