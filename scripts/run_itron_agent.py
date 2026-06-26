@@ -1,10 +1,8 @@
-import numpy as np
-import matplotlib.pyplot as plt
 from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.itron_agent import ITronAgent
 from BalloonPoppingGymEnv.utils.setup_logging import setup_logging
-from BalloonPoppingGymEnv.utils.render_scene import RenderScene
+from BalloonPoppingGymEnv.utils.scene import Scene
 
 scenario_number = 2
 
@@ -19,7 +17,7 @@ def run_for_development():
     # Instantiate agent with given parameters and any additional user kwargs
     agent = ITronAgent(given_parameters)
 
-    render_scene = RenderScene()
+    scene = Scene()
 
     # use seed=None to randomize environment
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
@@ -29,13 +27,13 @@ def run_for_development():
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
 
-        render_scene.get_ob(observation, info)
+        scene.update(observation, info)
 
         if info['popped_count'] == scenario_parameters["balloon"]["num"]:
             print(f"\nAll balloons popped at simulation_time: {observation['simulation_time']:.2f} sec")
             break
 
-    render_scene.draw()
+    scene.draw()
 
 if __name__ == "__main__":
     setup_logging()
