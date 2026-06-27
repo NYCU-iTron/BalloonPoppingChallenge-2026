@@ -50,7 +50,7 @@ class Estimator:
         self.error_buffer.clear()
         self.tracks = {}
 
-    def update_rocket_state(self, observation: dict) -> np.ndarray:
+    def estimate_rocket(self, observation: dict) -> np.ndarray:
         """
         Estimate rocket state from IMU and GNSS measurements.
 
@@ -135,12 +135,15 @@ class Estimator:
 
         Returns
         -------
-        predicted_pos : np.ndarray
-            Shape (3,): [predicted_pos(3)].
+        predicted_state : np.ndarray
+            Shape (6,): [predicted_pos(3), target_vel(3)]. Position is
+            velocity-extrapolated by the adaptive horizon; velocity is the
+            current estimate, passed through so the guidance law can run
+            proportional navigation (which needs the target velocity).
         """
         # Check if target exists
         if target_idx is None:
-            return np.full(3, np.nan)
+            return np.full(6, np.nan)
 
         if target_idx not in self.tracks:
             self.tracks[target_idx] = {
@@ -220,7 +223,8 @@ class Estimator:
         # Bound the final prediction horizon safely between physical constraints
         pred_horizon = min(max(pred_horizon, self.dt), self.max_prediction_horizon)
 
-        # Generate state prediction and map into grid storage
+        # Generate state prediction: position is led by velocity extrapolation,
+        # velocity is passed through for the guidance law's lead computation.
         predicted_pos = balloon_pos + balloon_vel * pred_horizon
 
-        return predicted_pos
+        return np.concatenate([predicted_pos, balloon_vel])

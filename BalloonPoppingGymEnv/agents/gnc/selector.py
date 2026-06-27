@@ -24,7 +24,7 @@ class Selector:
         """
         return np.array([90.0, 0.0])
 
-    def select(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
+    def select_target(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
         """
         Selects the target tracking balloon from the active environment cluster.
 
