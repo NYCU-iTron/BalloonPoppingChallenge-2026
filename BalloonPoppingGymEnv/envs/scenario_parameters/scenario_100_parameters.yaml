@@ -1,0 +1,389 @@
+scenario:
+  number: 100
+  random_seed: 1100
+environment:
+  date:
+  - 2025
+  - 7
+  - 25
+  - 8
+  latitude: 22.1749259
+  longitude: 120.8922531
+  elevation: 20.0
+  atmosphere_data_filename: TW_Cup_250726_NetCDF4_Ensemble.nc
+  gust:
+    enable: true
+    altitude_spacing: 10.0
+    max_gust_speed: 1.0597
+    gust_decay_height: 150.0
+simulation:
+  time_step: 0.01
+  max_time: 111.464
+balloon:
+  release_interval: 0.8666
+  num: 37
+  radius: 1.6598
+  mass: 0.8
+  inertia:
+  - 1
+  - 1
+  - 1
+  aero_coefficients:
+    cL: 0.0
+    cQ: 0.0
+    cD: 1.0
+    moment_damping: -0.01
+  stochastic:
+    latitude_std: 0.0
+    longitude_std: 0.0
+    mass_std: 0.0
+    volume_std: 0.0
+    inertia_std: 0.0
+  training_points:
+    mode: deterministic
+    coordinate_frame: launch_enu_m
+    trajectory: static
+    point_std_m: 0.00073
+    axis_scales:
+    - 1.31081
+    - 0.90541
+    - 0.78378
+    release_times:
+    - 0.0
+    - 0.8666
+    - 1.7333
+    - 2.5999
+    - 3.4666
+    - 4.3332
+    - 5.1999
+    - 6.0665
+    - 6.9332
+    - 7.7998
+    - 8.6665
+    - 9.5331
+    - 10.3998
+    - 11.2664
+    - 12.1331
+    - 12.9997
+    - 13.8664
+    - 14.733
+    - 15.5997
+    - 16.4663
+    - 17.333
+    - 18.1996
+    - 19.0663
+    - 19.9329
+    - 20.7996
+    - 21.6662
+    - 22.5329
+    - 23.3995
+    - 24.2662
+    - 25.1328
+    - 25.9995
+    - 26.8661
+    - 27.7328
+    - 28.5994
+    - 29.4661
+    - 30.3327
+    - 31.1994
+    initial_states:
+    - - 0.0005
+      - -5.0e-05
+      - 119.99974
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.0008
+      - -0.00044
+      - 120.00003
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00035
+      - -0.00041
+      - 119.99984
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 7.0e-05
+      - 0.00075
+      - 119.99989
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00147
+      - 0.00025
+      - 119.99897
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00101
+      - 0.00124
+      - 120.00016
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00171
+      - 0.00024
+      - 120.00154
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00092
+      - 0.00046
+      - 120.00079
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00044
+      - 0.00025
+      - 120.00041
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00046
+      - 0.00129
+      - 120.00012
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00042
+      - 0.00111
+      - 119.99964
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00019
+      - -0.00015
+      - 120.00048
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00038
+      - -0.0004
+      - 119.99911
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00139
+      - 0.00038
+      - 119.99965
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00106
+      - 0.0002
+      - 119.9999
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00084
+      - 0.0001
+      - 119.99999
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00087
+      - 0.00075
+      - 120.00042
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00036
+      - 0.00039
+      - 119.99879
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00044
+      - 0.00033
+      - 120.00059
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00093
+      - -0.00059
+      - 119.99999
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00046
+      - 0.00045
+      - 120.00006
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00109
+      - 0.0004
+      - 120.0011
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 6.0e-05
+      - -0.00133
+      - 120.00039
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00029
+      - 0.00088
+      - 119.99939
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00073
+      - 0.0003
+      - 119.99929
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00048
+      - 0.00039
+      - 120.00057
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00102
+      - -0.00023
+      - 119.99898
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.0013
+      - 0.00156
+      - 119.99988
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00181
+      - 0.00039
+      - 120.00016
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00084
+      - 0.00022
+      - 119.99982
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00051
+      - 0.00039
+      - 120.00013
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00084
+      - -0.00014
+      - 119.9992
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00088
+      - 0.00095
+      - 120.00068
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00059
+      - 0.00037
+      - 120.00058
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00013
+      - -0.00045
+      - 119.99939
+      - 0.0
+      - 0.0
+      - 0.0
+    - - -0.00086
+      - 3.0e-05
+      - 120.00032
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.00016
+      - -0.0008
+      - 119.9994
+      - 0.0
+      - 0.0
+      - 0.0
+rocket:
+  tank:
+    liquid: HTP
+    liquid_density: 1390
+    gas: N2
+    gas_density: 68
+    radius: 0.133
+    height: 0.83
+    flux_time: 30
+    initial_liquid_mass: 13.9
+    initial_gas_mass: 2.13
+    liquid_mass_flow_rate_out: 0.425
+    tank_position: 1.4
+  motor:
+    thrust_source: 1080
+    dry_mass: 0
+    dry_inertia:
+    - 0
+    - 0
+    - 0
+    center_of_dry_mass_position: 0.15
+    burn_time: 30
+    grain_number: 1
+    grain_separation: 0
+    grain_outer_radius: 0.0843
+    grain_initial_inner_radius: 0.0295
+    grain_initial_height: 0.2757
+    grain_density: 900
+    nozzle_radius: 0.04425
+    throat_radius: 0.023
+    nozzle_position: 0
+    grains_center_of_mass_position: 0.13785
+    motor_position: -0.8
+  rocket_body:
+    radius: 0.22
+    mass: 70
+    inertia:
+    - 26.54
+    - 26.38
+    - 1.6312
+    center_of_mass_without_motor: 0
+    power_off_drag: 0.25
+    power_on_drag: 0.25
+    volume: null
+  nose:
+    length: 1
+    kind: vonKarman
+    position: 1.5
+  fins:
+    useFins: true
+    n: 4
+    span: 0.4
+    root_chord: 0.5
+    tip_chord: 0.2
+    position: -0.3
+  sensors:
+    sampling_rate: 100
+    gyro_position: 0
+    gyro_noise_density: 0.00212127
+    gyro_random_walk_density: 0.00019663
+    gyro_constant_bias: 0.0
+    accelerometer_position: 0
+    accelerometer_noise_density: 0.02098707
+    accelerometer_random_walk_density: 0.00182113
+    accelerometer_constant_bias: 0.0
+    gnss_position: 0
+    gnss_position_accuracy: 0.42711
+    gnss_altitude_accuracy: 0.28709
+    gnss_velocity_accuracy: 0.04347
+  control:
+    gimbal_range: 15
+    gimbal_rate_limit: 60
+    max_roll_torque: 10
+    torque_rate_limit: 20
+    throttle_range:
+    - 0.0
+    - 1.0
+    throttle_rate_limit: 2.0

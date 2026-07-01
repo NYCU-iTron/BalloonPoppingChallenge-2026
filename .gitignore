@@ -6,6 +6,8 @@ BalloonPoppingGymEnv/envs/data/*
 BalloonPoppingGymEnv/evaluation/results/**.json
 BalloonPoppingGymEnv/evaluation/results/**.pkl
 
+BalloonPoppingGymEnv/envs/scenario_parameters/*
+
 # VSCode specific
 .vscode/*
 !.vscode/settings.json

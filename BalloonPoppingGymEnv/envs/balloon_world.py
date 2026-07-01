@@ -154,8 +154,13 @@ class BalloonPoppingEnv(gym.Env):
         # Generate balloon release sequences for all balloons
         self.__reset_balloon_release_sequence()
 
-        # Scenario 0: hello world with static balloons -- no Monte Carlo needed
-        if self.scenario_parameters["number"] == 0:
+        # Scenario 0 and generated training scenarios can bypass Monte Carlo.
+        if self.__has_deterministic_training_points():
+            self.__generate_deterministic_balloon_flights()
+            self._balloon_status = np.zeros(
+                (self.balloon_parameters["num"], 1), dtype=int
+            )
+        elif self.scenario_parameters["number"] == 0:
             self.__generate_static_balloon_flights()
             self._balloon_status = np.ones(
                 (self.balloon_parameters["num"], 1), dtype=int
@@ -550,6 +555,52 @@ class BalloonPoppingEnv(gym.Env):
         t = self.simulation_parameters["time_step"]
         self._balloon_release_at_step = np.arange(n) * int(i / t)
         self._np_random.shuffle(self._balloon_release_at_step)
+
+    def __has_deterministic_training_points(self):
+        training_points = self.balloon_parameters.get("training_points")
+        return (
+            self.scenario_parameters["number"] >= 100
+            and isinstance(training_points, dict)
+            and training_points.get("mode") == "deterministic"
+        )
+
+    def __generate_deterministic_balloon_flights(self):
+        """Build balloon trajectories directly from generated training points."""
+        training_points = self.balloon_parameters["training_points"]
+        initial_states = np.asarray(training_points["initial_states"], dtype=float)
+        release_times = np.asarray(training_points["release_times"], dtype=float)
+
+        if initial_states.ndim != 2 or initial_states.shape[1] != 6:
+            raise ValueError("balloon.training_points.initial_states must have shape (N, 6)")
+        if len(release_times) != initial_states.shape[0]:
+            raise ValueError("balloon.training_points.release_times must have one value per balloon")
+
+        num_balloons = initial_states.shape[0]
+        self.balloon_parameters["num"] = num_balloons
+
+        time_step = self.simulation_parameters["time_step"]
+        time_array = np.arange(
+            0,
+            self.simulation_parameters["max_time"],
+            time_step,
+        )
+        num_timesteps = len(time_array)
+
+        self._balloon_release_at_step = np.clip(
+            np.rint(release_times / time_step).astype(int),
+            0,
+            num_timesteps - 1,
+        )
+
+        self._balloon_flights = np.zeros((num_balloons, 6, num_timesteps))
+        self._balloon_flights[:, :, :] = initial_states[:, :, None]
+
+        if training_points.get("trajectory") == "linear":
+            for i, release_step in enumerate(self._balloon_release_at_step):
+                active_time = np.maximum(time_array - release_step * time_step, 0.0)
+                self._balloon_flights[i, 0, :] = initial_states[i, 0] + initial_states[i, 3] * active_time
+                self._balloon_flights[i, 1, :] = initial_states[i, 1] + initial_states[i, 4] * active_time
+                self._balloon_flights[i, 2, :] = initial_states[i, 2] + initial_states[i, 5] * active_time
 
     def __generate_balloon_flights(self):
         monte_carlo_environment = copy.deepcopy(self._rocketpy_env)
