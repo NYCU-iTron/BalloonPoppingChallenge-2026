@@ -15,6 +15,7 @@ dependencies = [
 	"pyqt6>=6.11.0",
 	"pyyaml>=6.0",
 	"setuptools<82.0.0",
+	"stable-baselines3>=2.9.0",
 ]
 
 [project.optional-dependencies]
