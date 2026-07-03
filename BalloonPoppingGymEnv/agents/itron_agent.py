@@ -53,8 +53,6 @@ class ITronAgent(BaseAgent):
         target_idx = self.selector.select_target(balloon_states, rocket_state)
         target_state = self.estimator.predict_target(observation, target_idx)
 
-        # Navigator (guidance) -> world-frame lateral acceleration command.
-        # Controller (autopilot + inner loop) -> actuator commands.
         a_cmd, desired_throttle = self.navigator.compute(target_state, rocket_state)
         tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
 
