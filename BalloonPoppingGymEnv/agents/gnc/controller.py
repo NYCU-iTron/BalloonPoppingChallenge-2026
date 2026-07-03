@@ -2,8 +2,6 @@ import logging
 import numpy as np
 from BalloonPoppingGymEnv.utils.schema import Schema
 
-GRAVITY = np.array([0.0, 0.0, -9.81])  # (m/s^2) world-frame gravity
-
 
 class Controller:
     def __init__(self, given_parameters):
@@ -72,7 +70,7 @@ class Controller:
         # Thrust must produce the lateral command AND cancel gravity, so the
         # required thrust acceleration is a_cmd minus the gravity vector.
         a_cmd_world = np.asarray(a_cmd_world, dtype=float).reshape(-1)[0:3]
-        a_thrust = a_cmd_world - GRAVITY
+        a_thrust = a_cmd_world - np.array([0.0, 0.0, -9.81])
         thrust_norm = np.linalg.norm(a_thrust)
         if thrust_norm > 1e-9:
             desired_dir_world = a_thrust / thrust_norm
