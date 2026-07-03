@@ -3,7 +3,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-from BalloonPoppingGymEnv.agents.rl_env_wrapper import RocketRLTrainingEnv
+from BalloonPoppingGymEnv.envs.rl_training_env import RLTrainingEnv
 
 
 def make_custom_env(scenario_params, given_params):
@@ -12,7 +12,7 @@ def make_custom_env(scenario_params, given_params):
     """
     def _init():
         raw_env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
-        return RocketRLTrainingEnv(raw_env, given_params)
+        return RLTrainingEnv(raw_env, given_params)
     return _init
 
 

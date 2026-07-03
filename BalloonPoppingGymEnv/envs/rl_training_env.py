@@ -1,12 +1,13 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
 
 
-class RocketRLTrainingEnv(gym.Wrapper):
+class RLTrainingEnv(gym.Wrapper):
     def __init__(self, env, given_parameters):
         super().__init__(env)
         self.given_parameters = given_parameters
