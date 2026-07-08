@@ -3,7 +3,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-from BalloonPoppingGymEnv.envs.rl_training_env import RLTrainingEnv
+from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 
 
 def make_custom_env(scenario_params, given_params):
@@ -12,11 +12,11 @@ def make_custom_env(scenario_params, given_params):
     """
     def _init():
         raw_env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
-        return RLTrainingEnv(raw_env, given_params)
+        return RLNavigatorEnv(raw_env, given_params)
     return _init
 
 
-def train_parallel():
+def train():
     scenario_parameters, given_parameters = load_scenario_parameters(2)
 
     # Define how many parallel universes (CPU cores) you want to occupy
@@ -44,4 +44,4 @@ def train_parallel():
 
 
 if __name__ == "__main__":
-    train_parallel()
+    train()
