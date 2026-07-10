@@ -13,7 +13,7 @@ def make_custom_env(scenario_params, given_params):
     return _init
 
 def train():
-    scenario_parameters, given_parameters = load_scenario_parameters(2)
+    scenario_parameters, given_parameters = load_scenario_parameters(1)
 
     num_envs = 8
 
