@@ -96,17 +96,9 @@ class RLNavigatorEnv(gym.Wrapper):
         target_state = self.estimator.predict_target(self.observation, target_idx)
 
         rl_obs = self.get_rl_observation(self.rocket_state, target_state)
-
-        # --------------------------------- RL Reward -------------------------------- #
-        if info.get("crashed", False):
-            rl_reward = -100.0
-        if info.get("popped_count", 0) > 0:
-            rl_reward = 200.0 * info["popped_count"]
-        else:
-            rl_reward = -1.0
+        rl_reward = self.compute_reward(self.rocket_state, target_state, info, rl_action)
 
         return rl_obs, rl_reward, terminated, truncated, info
-
 
     def get_rl_observation(self, rocket_state, target_state):
         rel_pos = target_state[0:3] - rocket_state[0:3]
@@ -118,3 +110,42 @@ class RLNavigatorEnv(gym.Wrapper):
         rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [z]]).astype(np.float32)
 
         return rl_obs
+
+    def compute_reward(self, rocket_state, target_state, info, rl_action):
+        # 1. Sparse Terminal Events (Critical Gates)
+        if info.get("crashed", False):
+            return -100.0
+
+        pop_reward = 0.0
+        if info.get("popped_count", 0) > 0:
+            pop_reward = 200.0 * info["popped_count"]
+            # Trigger immediate success return to maximize this trajectory's value credit
+            return pop_reward
+
+        # 2. Dense Geometrical Tracking (Distance Penalty)
+        rel_pos = target_state[0:3] - rocket_state[0:3]
+        distance = np.linalg.norm(rel_pos)
+        distance_penalty = -0.01 * distance
+
+        # 3. Kinematic Alignment (Closing Velocity Reward)
+        # Evaluate if the rocket's velocity vector is pointing toward the target
+        alignment_reward = 0.0
+        if distance > 1e-3:
+            rocket_vel = rocket_state[3:6]
+            unit_rel_pos = rel_pos / distance
+            # Dot product: Positive value means rocket is actively narrowing the gap
+            closing_speed = np.dot(rocket_vel, unit_rel_pos)
+            alignment_reward = 0.1 * closing_speed
+
+        # 4. Actuator Regularization (Control Effort Penalty)
+        # Penalize excessive acceleration commands to prevent wild TVC shaking
+        acc_commands = rl_action[0:3]
+        control_penalty = -0.005 * np.linalg.norm(acc_commands)
+
+        # 5. Temporal Efficiency (Time Penalty)
+        # Keeps the agent aggressive and prevents drifting idling behavior
+        time_penalty = -0.1
+
+        # Sum total shaped scalar feedback
+        total_reward = pop_reward + distance_penalty + alignment_reward + control_penalty + time_penalty
+        return float(total_reward)
