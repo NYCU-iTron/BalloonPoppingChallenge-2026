@@ -4,7 +4,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
-
+from BalloonPoppingGymEnv.utils.plotting_callback import PlottingCallback
 
 def make_custom_env(scenario_params, given_params):
     def _init():
@@ -23,6 +23,8 @@ def train():
         vec_env_cls=SubprocVecEnv
     )
 
+    plot_callback = PlottingCallback(window_size=20, update_freq=1)
+
     model = PPO(
         "MlpPolicy",
         train_env,
@@ -32,7 +34,7 @@ def train():
         batch_size=128
     )
 
-    model.learn(total_timesteps=50000)
+    model.learn(total_timesteps=50000, callback=plot_callback)
     model.save("rl_navigator")
 
 
