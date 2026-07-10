@@ -116,36 +116,41 @@ class RLNavigatorEnv(gym.Wrapper):
         if info.get("crashed", False):
             return -100.0
 
-        pop_reward = 0.0
         if info.get("popped_count", 0) > 0:
-            pop_reward = 200.0 * info["popped_count"]
-            # Trigger immediate success return to maximize this trajectory's value credit
-            return pop_reward
+            # Scale reward dynamically if multiple balloons are popped
+            return 200.0 * info["popped_count"]
 
-        # 2. Dense Geometrical Tracking (Distance Penalty)
+        # 2. Non-Linear Geometrical Tracking (Bounded Distance Penalty)
+        # Replaced linear penalty with a hyperbolic function to prevent scaling explosion over far distances.
+        # This keeps the maximum step penalty bounded between [0.0, -0.5]
         rel_pos = target_state[0:3] - rocket_state[0:3]
         distance = np.linalg.norm(rel_pos)
-        distance_penalty = -0.01 * distance
+        distance_penalty = -0.5 * (distance / (distance + 100.0))
 
         # 3. Kinematic Alignment (Closing Velocity Reward)
-        # Evaluate if the rocket's velocity vector is pointing toward the target
+        # Scaled down coefficient to prevent random high-speed drift exploitation.
         alignment_reward = 0.0
         if distance > 1e-3:
             rocket_vel = rocket_state[3:6]
             unit_rel_pos = rel_pos / distance
-            # Dot product: Positive value means rocket is actively narrowing the gap
             closing_speed = np.dot(rocket_vel, unit_rel_pos)
-            alignment_reward = 0.1 * closing_speed
+            alignment_reward = 0.02 * closing_speed
 
-        # 4. Actuator Regularization (Control Effort Penalty)
-        # Penalize excessive acceleration commands to prevent wild TVC shaking
-        acc_commands = rl_action[0:3]
-        control_penalty = -0.005 * np.linalg.norm(acc_commands)
+        # 4. Actuator Regularization (Smooth Action Delta Penalty)
+        # Tracks and penalizes high-frequency control chatter (jitter) instead of absolute thrust effort.
+        if not hasattr(self, "prev_action") or self.prev_action is None:
+            self.prev_action = np.zeros(4, dtype=np.float32)
 
-        # 5. Temporal Efficiency (Time Penalty)
-        # Keeps the agent aggressive and prevents drifting idling behavior
-        time_penalty = -0.1
+        action_delta = rl_action - self.prev_action
+        smoothness_penalty = -0.05 * np.linalg.norm(action_delta)
 
-        # Sum total shaped scalar feedback
-        total_reward = pop_reward + distance_penalty + alignment_reward + control_penalty + time_penalty
+        # Cache current action as historical state reference for the next cycle step
+        self.prev_action = rl_action.copy()
+
+        # 5. Temporal Efficiency (Balanced Time Penalty)
+        # Lowered to -0.02. At 20Hz, a full 10-second flight costs -4.0 total points.
+        time_penalty = -0.02
+
+        # Aggregate final reshaped scalar feedback
+        total_reward = distance_penalty + alignment_reward + smoothness_penalty + time_penalty
         return float(total_reward)
