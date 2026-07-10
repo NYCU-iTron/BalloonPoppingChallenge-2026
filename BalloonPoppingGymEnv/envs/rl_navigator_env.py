@@ -5,7 +5,6 @@ import numpy as np
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class RLNavigatorEnv(gym.Wrapper):
@@ -17,35 +16,63 @@ class RLNavigatorEnv(gym.Wrapper):
         self.selector = Selector(given_parameters)
         self.controller = Controller(given_parameters)
 
+        # Action:
+        #   3D acceleration command (3)
+        #   Throttle command (1)
         self.action_space = spaces.Box(
             low=np.array([-30.0, -30.0, -30.0, 0.0], dtype=np.float32),
             high=np.array([30.0, 30.0, 30.0, 1.0], dtype=np.float32),
             dtype=np.float32
         )
 
+        # Observation:
+        #   Relative position (3)
+        #   Relative velocity (3)
+        #   Rocket velocity (3)
+        #   Rocket altitude (1)
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32
         )
 
     def reset(self, **kwargs):
-        observation, info = self.env.reset(**kwargs)
+        self.observation, info = self.env.reset(**kwargs)
 
         self.estimator.reset()
         self.selector.reset()
         self.controller.reset()
 
-        # TODO: Fast forward to launch time
-        t = observation[Schema.Observation.SIMULATION_TIME]
-        is_launched = t >= self.selector.get_launch_time(observation)
+        # Fast forward to the launch time
+        while not self.selector.should_launch(self.observation):
+            idle_action = {
+                "launch": False,  # Keep clamp engaged on the launchpad
+                "launch_inclination_heading": np.array([90.0, 0.0]),
+                "tvc": np.zeros(2),
+                "roll": 0.0,
+                "throttle": self.controller.throttle_min
+            }
+            self.observation, reward, terminated, truncated, info = self.env.step(idle_action)
 
+            if terminated or truncated:
+                self.observation, info = self.env.reset(**kwargs)
+                break
 
-        return self.get_rl_observation(observation), info
+        # Update states
+        self.rocket_state = self.estimator.estimate_rocket(self.observation)
+        balloon_states = self.estimator.predict_balloons(self.observation)
+
+        # Update target
+        target_idx = self.selector.select_target(balloon_states, self.rocket_state)
+        target_state = self.estimator.predict_target(self.observation, target_idx)
+
+        rl_obs = self.get_rl_observation(self.rocket_state, target_state)
+
+        return rl_obs, info
 
     def step(self, rl_action):
         a_cmd_world = rl_action[0:3]
         desired_throttle = float(rl_action[3])
 
-        tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd_world, desired_throttle)
+        tvc, roll, throttle = self.controller.compute(self.rocket_state, a_cmd_world, desired_throttle)
 
         is_launched = self.selector.should_launch(self.observation)
         launch_inclination_heading = self.selector.get_launch_heading(self.observation)
@@ -58,18 +85,17 @@ class RLNavigatorEnv(gym.Wrapper):
             "throttle": throttle,
         }
 
-        observation, reward, terminated, truncated, info = self.env.step(action)
+        self.observation, reward, terminated, truncated, info = self.env.step(action)
 
         # Update states
-        rocket_state = self.estimator.estimate_rocket(observation)
-        balloon_states = self.estimator.predict_balloons(observation)
+        self.rocket_state = self.estimator.estimate_rocket(self.observation)
+        balloon_states = self.estimator.predict_balloons(self.observation)
 
         # Update target
-        target_idx = self.selector.select_target(balloon_states, rocket_state)
-        target_state = self.estimator.predict_target(observation, target_idx)
+        target_idx = self.selector.select_target(balloon_states, self.rocket_state)
+        target_state = self.estimator.predict_target(self.observation, target_idx)
 
-        rl_obs = self.get_rl_observation(rocket_state, target_state)
-
+        rl_obs = self.get_rl_observation(self.rocket_state, target_state)
 
         # --------------------------------- RL Reward -------------------------------- #
         if info.get("crashed", False):
@@ -83,12 +109,12 @@ class RLNavigatorEnv(gym.Wrapper):
 
 
     def get_rl_observation(self, rocket_state, target_state):
-
         rel_pos = target_state[0:3] - rocket_state[0:3]
         rel_vel = (target_state[3:6] if target_state.size >= 6 else np.zeros(3)) - rocket_state[3:6]
+
         rocket_vel = rocket_state[3:6]
         z = rocket_state[2]
 
-        rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, z]).astype(np.float32)
+        rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [z]]).astype(np.float32)
 
         return rl_obs
