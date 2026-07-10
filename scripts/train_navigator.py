@@ -1,3 +1,4 @@
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -13,7 +14,7 @@ def make_custom_env(scenario_params, given_params):
     return _init
 
 def train():
-    scenario_parameters, given_parameters = load_scenario_parameters(1)
+    scenario_parameters, given_parameters = load_scenario_parameters(0)
 
     num_envs = 8
 
@@ -25,16 +26,27 @@ def train():
 
     plot_callback = PlottingCallback(window_size=20, update_freq=1)
 
+    policy_kwargs = dict(
+        activation_fn=torch.nn.Tanh,
+        net_arch=dict(
+            pi=[128, 128],
+            vf=[128, 128]
+        )
+    )
+
     model = PPO(
         "MlpPolicy",
         train_env,
         verbose=1,
+        device="cpu",
         learning_rate=3e-4,
         n_steps=2048,
-        batch_size=128
+        batch_size=256,
+        n_epochs=10,
+        policy_kwargs=policy_kwargs
     )
 
-    model.learn(total_timesteps=50000, callback=plot_callback)
+    model.learn(total_timesteps=5000000, callback=plot_callback)
     model.save("rl_navigator")
 
 
