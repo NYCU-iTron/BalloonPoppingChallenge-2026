@@ -47,9 +47,8 @@ class RLNavigatorEnv(gym.Wrapper):
 
         tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd_world, desired_throttle)
 
-        t = observation[Schema.Observation.SIMULATION_TIME]
-        is_launched = t >= self.selector.get_launch_time(observation)
-        launch_inclination_heading = self.selector.get_launch_heading(observation)
+        is_launched = self.selector.should_launch(self.observation)
+        launch_inclination_heading = self.selector.get_launch_heading(self.observation)
 
         action = {
             "launch": is_launched,

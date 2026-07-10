@@ -4,7 +4,6 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class ITronAgent(BaseAgent):
@@ -57,8 +56,7 @@ class ITronAgent(BaseAgent):
         tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
 
         # Set launch parameters
-        t = observation[Schema.Observation.SIMULATION_TIME]
-        is_launched = t >= self.selector.get_launch_time(observation)
+        is_launched = self.selector.should_launch(observation)
         launch_inclination_heading = self.selector.get_launch_heading(observation)
 
         return {
