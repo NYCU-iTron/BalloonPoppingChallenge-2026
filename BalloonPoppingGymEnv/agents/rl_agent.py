@@ -2,41 +2,19 @@ import logging
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
-from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
+from BalloonPoppingGymEnv.agents.gnc.rl_navigator import RLNavigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
 
 
 class ITronAgent(BaseAgent):
     def __init__(self, given_parameters):
-        """
-        Initializes the agent with environment and rocket configurations.
-
-        Parameters
-        ----------
-        given_parameters : dict
-            Nested configuration metadata structured as follows:
-                - environment:
-                    date : list[int] -> [year, month, day, hour]
-                    latitude / longitude / elevation : float -> [deg, deg, m]
-                - simulation:
-                    time_step / max_time : float -> [s, s]
-                - balloon:
-                    release_interval / num / radius / mass : [s, int, m, kg]
-                - rocket:
-                    tank : liquid, gas parameters and initial mass [kg, kg/s, m]
-                    motor : thrust_source [N], burn_time [s], and geometric specs
-                    rocket_body : structural mass [kg] and inertia [kg·m²]
-                    nose / fins : aerodynamic shapes and assembly positions [m]
-                    sensors : sampling_rate [Hz] and noise parameters
-                    control : gimbal_range [deg], max_roll_torque [Nm], limits
-        """
         super().__init__(given_parameters)
         self.logger = logging.getLogger(__name__)
 
         # Initialize GNC components
         self.estimator = Estimator(given_parameters)
         self.selector = Selector(given_parameters)
-        self.navigator = Navigator(given_parameters)
+        self.navigator = RLNavigator(given_parameters)
         self.controller = Controller(given_parameters)
 
     def reset(self) -> None:

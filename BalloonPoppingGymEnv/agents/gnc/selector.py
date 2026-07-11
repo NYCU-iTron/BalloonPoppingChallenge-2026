@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from BalloonPoppingGymEnv.utils.schema import Schema
+
 
 class Selector:
     def __init__(self, given_parameters):
@@ -12,11 +12,18 @@ class Selector:
     def reset(self):
         pass
 
-    def get_launch_time(self, observation: dict) -> float:
-        """
-        Returns the desired launch time in seconds.
-        """
-        return 1.0
+    def should_launch(self, observation: dict) -> bool:
+        raw_balloons = np.asarray(observation["balloon_states"], dtype=float)
+
+        # If no targets
+        if raw_balloons.size == 0 or len(raw_balloons) == 0:
+            return True
+
+        balloon_altitudes = raw_balloons[:, 2]
+        launch_threshold = 20.0
+        should_launch = bool(np.any(balloon_altitudes > launch_threshold))
+
+        return should_launch
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """
@@ -24,7 +31,7 @@ class Selector:
         """
         return np.array([90.0, 0.0])
 
-    def select(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
+    def select_target(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
         """
         Selects the target tracking balloon from the active environment cluster.
 
