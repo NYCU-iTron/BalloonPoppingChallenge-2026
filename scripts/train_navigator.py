@@ -57,7 +57,7 @@ def train():
     save_callback = SaveCallback(save_dir=str(scripts_dir))
     callback_list = CallbackList([plot_callback, save_callback])
 
-    model.learn(total_timesteps=100000, callback=callback_list)
+    model.learn(total_timesteps=5000000, callback=callback_list)
 
     final_model_path = scripts_dir / "final_model.zip"
     model.save(str(final_model_path))
