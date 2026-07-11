@@ -16,6 +16,7 @@ dependencies = [
 	"pyyaml>=6.0",
 	"setuptools<82.0.0",
 	"stable-baselines3>=2.9.0",
+    "tensorboard",
 ]
 
 [project.optional-dependencies]

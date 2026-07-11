@@ -45,9 +45,9 @@ def train():
         batch_size=256,
         n_epochs=10,
         policy_kwargs=policy_kwargs
+        tensorboard_log=str(scripts_dir / "tensorboard")
     )
 
-    current_dir = Path(__file__).resolve().parent
     plot_callback = PlottingCallback()
     save_callback = SaveCallback(save_dir=str(current_dir / "models"), save_freq=20000)
     callback_list = CallbackList([plot_callback, save_callback])
