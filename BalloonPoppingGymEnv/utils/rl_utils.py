@@ -23,7 +23,7 @@ def compute_rl_reward(
     # 1. Sparse Terminal Events & Dynamic Fate Evaluation
     # Priority A: Fresh hit detected in this current step
     if reward > 0:
-        return 200.0 * reward
+        return 1000.0 * reward
 
     # Priority B: Episode naturally terminated (Out of fuel / Crashed)
     if terminated:
@@ -70,14 +70,14 @@ def compute_rl_reward(
     # 6. Launch Phase & Attitude Protection (Anti-Gravity-Turn Crash Shield)
     if v_z < 0.0:
         falling_speed = abs(v_z)
-        stability_reward = -1.5 * float(np.log1p(falling_speed))
+        stability_reward = -0.3 * float(np.log1p(falling_speed))
     else:
         stability_reward = 0.05 * v_z if z < target_state[2] else 0.0
 
-    horizontal_speed = np.linalg.norm([v_x, v_y])
     tilt_penalty = 0.0
+    horizontal_speed = np.linalg.norm([v_x, v_y])
     if z < 150.0 and horizontal_speed > v_z:
-        tilt_penalty = -0.05 * (horizontal_speed - v_z)
+        tilt_penalty = -0.2
 
     # Sum total shaped scalar feedback
     total_reward = (
