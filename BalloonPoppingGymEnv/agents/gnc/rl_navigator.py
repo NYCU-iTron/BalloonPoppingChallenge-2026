@@ -1,22 +1,19 @@
 import os
 import logging
+from pathlib import Path
 import numpy as np
 from stable_baselines3 import PPO
 
 from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_observation
 
 class RLNavigator:
-    def __init__(self, given_parameters, model_path="rl_navigator.zip"):
+    def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
         self.given_parameters = given_parameters
 
-        # Load the pre-trained stable-baselines3 PPO model onto CPU for inference fast execution
-        if os.path.exists(model_path):
-            self.model = PPO.load(model_path, device="cpu")
-            self.logger.info(f"Successfully loaded RL network deployment from: {model_path}")
-        else:
-            self.model = None
-            self.logger.error(f"Critical Error: Model file assets not discovered at paths: {model_path}")
+        agent_root = Path(__file__).resolve().parent.parent
+        model_path = agent_root / "models" / "rl_navigator.zip"
+        self.model = PPO.load(str(model_path), device="cpu")
 
     def reset(self):
         """Resets sequential tracking variables if necessary."""

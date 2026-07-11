@@ -1,4 +1,6 @@
 import logging
+import numpy as np
+
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
@@ -6,7 +8,7 @@ from BalloonPoppingGymEnv.agents.gnc.rl_navigator import RLNavigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
 
 
-class ITronAgent(BaseAgent):
+class RLAgent(BaseAgent):
     def __init__(self, given_parameters):
         super().__init__(given_parameters)
         self.logger = logging.getLogger(__name__)
@@ -16,6 +18,10 @@ class ITronAgent(BaseAgent):
         self.selector = Selector(given_parameters)
         self.navigator = RLNavigator(given_parameters)
         self.controller = Controller(given_parameters)
+
+        self.rocket_state = None
+        self.target_state = None
+        self.rl_action = None
 
     def reset(self) -> None:
         self.estimator.reset()
@@ -36,6 +42,11 @@ class ITronAgent(BaseAgent):
         # Set launch parameters
         is_launched = self.selector.should_launch(observation)
         launch_inclination_heading = self.selector.get_launch_heading(observation)
+
+        # Store for reward computation
+        self.rocket_state = rocket_state
+        self.target_state = target_state
+        self.rl_action = np.concatenate((a_cmd, [desired_throttle]))
 
         return {
             "launch": is_launched,
