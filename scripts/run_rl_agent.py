@@ -42,7 +42,8 @@ def run_for_development():
             print(f"\nAll balloons popped at simulation_time: {observation['simulation_time']:.2f} sec")
             break
 
-        rl_reward += compute_rl_reward(agent.rocket_state, agent.target_state, info, action_delta)
+        rl_reward += compute_rl_reward(observation, info, agent.rocket_state, agent.target_state,
+                                       reward, terminated, action_delta)
 
     print(f"Total RL Reward: {rl_reward}")
     scene.draw()

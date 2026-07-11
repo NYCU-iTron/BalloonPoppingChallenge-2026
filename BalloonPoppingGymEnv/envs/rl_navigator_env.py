@@ -100,6 +100,7 @@ class RLNavigatorEnv(gym.Wrapper):
         self.prev_action = rl_action.copy()
 
         rl_obs = compute_rl_observation(self.rocket_state, target_state)
-        rl_reward = compute_rl_reward(self.rocket_state, target_state, info, action_delta)
+        rl_reward = compute_rl_reward(self.observation, info, self.rocket_state, target_state,
+                                      reward, terminated, action_delta)
 
         return rl_obs, rl_reward, terminated, truncated, info
