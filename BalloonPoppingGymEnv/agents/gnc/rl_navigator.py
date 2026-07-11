@@ -3,6 +3,7 @@ import logging
 import numpy as np
 from stable_baselines3 import PPO
 
+from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_observation
 
 class RLNavigator:
     def __init__(self, given_parameters, model_path="rl_navigator.zip"):
@@ -43,22 +44,7 @@ class RLNavigator:
         if target_state is None or np.isnan(target_state).any() or self.model is None:
             return None, None
 
-        # Extract internal rocket state vectors
-        rocket_pos = rocket_state[0:3]
-        rocket_vel = rocket_state[3:6]
-        z = rocket_state[2]  # Altitude index channel
-
-        # Extract internal target state vectors
-        target_state = np.asarray(target_state, dtype=float).reshape(-1)
-        target_pos = target_state[0:3]
-        target_vel = target_state[3:6] if target_state.size >= 6 else np.zeros(3)
-
-        # --- Reconstruct the 10-Dimensional RL Observation Vector ---
-        rel_pos = target_pos - rocket_pos
-        rel_vel = target_vel - rocket_vel
-
-        # Must exactly match the concatenation architecture used during training sessions
-        rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [z]]).astype(np.float32)
+        rl_obs = compute_rl_observation(rocket_state, target_state)
 
         # --- Neural Network Model Inference Execution ---
         # deterministic=True disables exploration noise to output optimal actions
