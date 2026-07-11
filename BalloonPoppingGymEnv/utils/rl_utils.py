@@ -69,7 +69,8 @@ def compute_rl_reward(
 
     # 6. Launch Phase & Attitude Protection (Anti-Gravity-Turn Crash Shield)
     if v_z < 0.0:
-        stability_reward = 2.0 * v_z
+        falling_speed = abs(v_z)
+        stability_reward = -1.5 * float(np.log1p(falling_speed))
     else:
         stability_reward = 0.05 * v_z if z < target_state[2] else 0.0
 
