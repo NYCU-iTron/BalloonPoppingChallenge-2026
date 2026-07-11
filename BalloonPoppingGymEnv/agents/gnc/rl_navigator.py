@@ -12,7 +12,7 @@ class RLNavigator:
         self.given_parameters = given_parameters
 
         agent_root = Path(__file__).resolve().parent.parent
-        model_path = agent_root / "models" / "rl_navigator.zip"
+        model_path = agent_root / "models" / "rl_navigator_0711.zip"
         self.model = PPO.load(str(model_path), device="cpu")
 
     def reset(self):
