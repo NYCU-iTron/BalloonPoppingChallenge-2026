@@ -20,66 +20,88 @@ def compute_rl_reward(
     terminated: bool,
     action_delta: np.ndarray
 ) -> float:
-    # 1. Sparse Terminal Events & Dynamic Fate Evaluation
-    # Priority A: Fresh hit detected in this current step
+    # =========================================================================
+    # 1. Sparse Terminal Events & Absolute Objective Overlords
+    # =========================================================================
+    # Priority A: Instantaneous balloon popping success event
     if reward > 0:
         return 1000.0 * reward
 
-    # Priority B: Episode naturally terminated (Out of fuel / Crashed)
+    # Priority B: Episode termination handling (Out of fuel / Crashed / Timed out)
     if terminated:
-        # Safely extract simulation_time from the observation dictionary matrix
-        survival_time = observation.get("simulation_time", 0.0)
         total_popped = info.get("popped_count", 0)
-
-        # Fixed base penalty for ending the flight session
-        terminal_base = -100.0
-
-        # PRIORITIZED SURVIVAL: Linearly scales with flight duration to mitigate the penalty.
-        # Safely reward the agent for staying airborne longer even if it hasn't popped balloons yet.
-        survival_bonus = survival_time * 2.0
-
-        # Tactical reward for mission completion objectives
-        tactical_bonus = total_popped * 50.0
-
-        return float(terminal_base + survival_bonus + tactical_bonus)
+        # Static baseline penalty for dying. No survival_bonus to eliminate hover exploits.
+        # Heavily amplified tactical bonus to ensure winning strictly dominates the policy.
+        return float(-100.0 + total_popped * 2000.0)
 
     # Extract kinematic states safely for continuous shaping rewards
     rocket_pos = rocket_state[0:3]
     rocket_vel = rocket_state[3:6]
     z = rocket_state[2]
-    v_x, v_y, v_z = rocket_vel[0], rocket_vel[1], rocket_vel[2]
 
-    # 2. Non-Linear Geometrical Tracking (Bounded Distance Penalty)
+    # Target-relative tactical geometry calculation
+    target_z = target_state[2]
+    is_target_above = target_z > z
     rel_pos = target_state[0:3] - rocket_pos
     distance = np.linalg.norm(rel_pos)
-    distance_penalty = -0.5 * (distance / (distance + 100.0))
 
-    # 3. Kinematic Alignment (Closing Velocity Reward)
+    # =========================================================================
+    # 2. Continuous Tracking Hub (Fractional & Soft-Clipped Strategy)
+    # =========================================================================
+    # Bounded fractional distance shaping. Strictly maps between 0.0 and -1.0.
+    # Eliminates spatial penalty explosions regardless of how far the rocket drifts.
+    distance_penalty = -1.0 * (distance / (distance + 100.0))
+
+    # Kinematic Alignment via Vector Dot Product (Handles both UP and DOWN targets)
     alignment_reward = 0.0
     if distance > 1e-3:
         unit_rel_pos = rel_pos / distance
+        # closing_speed > 0 means chasing towards target; < 0 means escaping from target
         closing_speed = np.dot(rocket_vel, unit_rel_pos)
-        alignment_reward = 0.02 * closing_speed
 
-    # 4. Actuator Regularization (Smooth Action Delta Penalty)
+        if closing_speed > 0:
+            alignment_reward = 0.2 * closing_speed
+        else:
+            # Soft-clipped drift penalty to maintain mild guidance gradients without shattering PPO
+            alignment_reward = max(0.2 * closing_speed, -0.5)
+
+    # =========================================================================
+    # 3. Regularizations & Direct Time Efficiency Drains
+    # =========================================================================
     smoothness_penalty = -0.05 * np.linalg.norm(action_delta)
+    time_penalty = -0.05  # Constant pressure forces the rocket to intercept ASAP
 
-    # 5. Temporal Efficiency (Balanced Time Penalty)
-    time_penalty = -0.02
+    # =========================================================================
+    # 4. Dynamic Physics Protection (Relative Log Strategy)
+    # =========================================================================
+    stability_reward = 0.0
+    v_z = rocket_vel[2]
 
-    # 6. Launch Phase & Attitude Protection (Anti-Gravity-Turn Crash Shield)
     if v_z < 0.0:
-        falling_speed = abs(v_z)
-        stability_reward = -0.3 * float(np.log1p(falling_speed))
+        if is_target_above:
+            # Unintentional falling: Log-compressed to shield gradients during terminal dives
+            falling_speed = abs(v_z)
+            stability_reward = -0.3 * float(np.log1p(falling_speed))
+        else:
+            # Intentional diving: Rewarded for actively pursuing lower altitude objectives
+            stability_reward = 0.02 * abs(v_z)
     else:
-        stability_reward = 0.05 * v_z if z < target_state[2] else 0.0
+        if is_target_above:
+            # Intentional climbing: Rewarded for pursuing higher altitude objectives
+            stability_reward = 0.05 * v_z
+        else:
+            # Unintentional climbing away from lower targets
+            stability_reward = -0.1 * v_z
 
+    # =========================================================================
+    # 5. Low-Altitude Ground Proximity Guard
+    # =========================================================================
     tilt_penalty = 0.0
-    horizontal_speed = np.linalg.norm([v_x, v_y])
+    horizontal_speed = np.linalg.norm(rocket_vel[0:2])
     if z < 150.0 and horizontal_speed > v_z:
         tilt_penalty = -0.2
 
-    # Sum total shaped scalar feedback
+    # Sum total unified continuous shaping feedback surface
     total_reward = (
         distance_penalty
         + alignment_reward
