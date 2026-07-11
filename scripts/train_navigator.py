@@ -30,8 +30,8 @@ def train():
     policy_kwargs = dict(
         activation_fn=torch.nn.Tanh,
         net_arch=dict(
-            pi=[128, 128],
-            vf=[128, 128]
+            pi=[256, 256],
+            vf=[256, 256]
         )
     )
 
@@ -44,9 +44,12 @@ def train():
         device="cpu",
         learning_rate=3e-4,
         n_steps=2048,
-        batch_size=256,
+        batch_size=512,
         n_epochs=10,
-        policy_kwargs=policy_kwargs
+        gamma=0.99,
+        gae_lambda=0.95,
+        ent_coef=0.001,
+        policy_kwargs=policy_kwargs,
         tensorboard_log=str(scripts_dir / "tensorboard")
     )
 
