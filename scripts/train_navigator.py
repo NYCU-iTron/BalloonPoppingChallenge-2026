@@ -35,6 +35,8 @@ def train():
         )
     )
 
+    scripts_dir = Path(__file__).resolve().parent
+
     model = PPO(
         "MlpPolicy",
         train_env,
@@ -48,12 +50,14 @@ def train():
         tensorboard_log=str(scripts_dir / "tensorboard")
     )
 
-    plot_callback = PlottingCallback()
-    save_callback = SaveCallback(save_dir=str(current_dir / "models"), save_freq=20000)
+    plot_callback = PlottingCallback(save_dir=str(scripts_dir))
+    save_callback = SaveCallback(save_dir=str(scripts_dir))
     callback_list = CallbackList([plot_callback, save_callback])
 
     model.learn(total_timesteps=100000, callback=callback_list)
-    model.save("rl_navigator")
+
+    final_model_path = scripts_dir / "final_model.zip"
+    model.save(str(final_model_path))
 
 
 if __name__ == "__main__":

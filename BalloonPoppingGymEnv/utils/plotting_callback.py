@@ -1,13 +1,14 @@
-import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
 class PlottingCallback(BaseCallback):
-    def __init__(self, window_size=25, verbose=0, update_freq=1):
+    def __init__(self, save_dir: str, window_size=25, verbose=0, update_freq=1):
         super().__init__(verbose)
         self.window_size = window_size
         self.update_freq = update_freq
+
+        self.save_dir = save_dir
 
         # Recording arrays
         self.episode_rewards = []
@@ -116,10 +117,10 @@ class PlottingCallback(BaseCallback):
         self._update_plot()
 
         # Save output consistently as PNG file asset
-        png = "rl_training_progress.png"
+        png = f"{self.save_dir}/rl_training_progress.png"
         plt.savefig(png, dpi=150, bbox_inches='tight')
 
-        pdf = "rl_training_progress.pdf"
+        pdf = f"{self.save_dir}/rl_training_progress.pdf"
         plt.savefig(pdf, dpi=150, bbox_inches='tight')
 
         if self.verbose:
