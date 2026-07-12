@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
 from BalloonPoppingGymEnv.utils.scene import Scene
@@ -11,7 +11,7 @@ scenario_number = 0
 
 def run_for_development():
     scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
-    env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
+    env = BalloonPoppingEnv(render_mode="matplotlib", parameters=scenario_parameters)
 
     checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1444" / "checkpoints"
     model_path = checkpoint_dir / "rl_model_900000_steps.zip"
