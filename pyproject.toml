@@ -17,6 +17,8 @@ dependencies = [
 	"setuptools<82.0.0",
 	"stable-baselines3>=2.9.0",
     "tensorboard",
+    "tqdm",
+    "rich",
 ]
 
 [project.optional-dependencies]
