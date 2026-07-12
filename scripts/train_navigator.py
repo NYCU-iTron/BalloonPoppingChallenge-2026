@@ -1,4 +1,3 @@
-import math
 import torch
 from pathlib import Path
 from datetime import datetime
@@ -25,7 +24,7 @@ def main():
     # Dependent on CPU cores available
     n_train_envs = 24
 
-    total_timesteps = 1_500_000
+    total_timesteps = 15_000_000
     n_evals = 30
     n_saves = 10
 
@@ -39,15 +38,10 @@ def main():
     horizon_seconds = 40.0
     gamma = 1.0 - (RL_FRAME_SKIP * time_step) / horizon_seconds
 
-    # Derive n_steps from a target number of PPO updates:
-    n_updates = 100
+    n_steps = 512
     batch_size = 512
-    step_mult = batch_size // math.gcd(n_train_envs, batch_size)
-    n_steps = max(
-        round(total_timesteps / (n_updates * n_train_envs) / step_mult) * step_mult,
-        step_mult,
-    )
-    assert (n_steps * n_train_envs) % batch_size == 0
+    assert (n_steps * n_train_envs) % batch_size == 0, \
+        "batch_size must divide n_steps * n_train_envs"
     print(f"[Config] n_steps={n_steps}, buffer={n_steps * n_train_envs}, "
           f"~{total_timesteps // (n_steps * n_train_envs)} PPO updates")
 
