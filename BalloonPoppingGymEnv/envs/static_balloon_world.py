@@ -247,7 +247,7 @@ class BalloonPoppingEnv(gym.Env):
             "rocket_states": self._rocket_states.copy().tolist(),
             "balloon_states": self._balloon_states.copy().tolist(),
             "balloon_status": self._balloon_status[:, 0].tolist(),
-        }        
+        }
         if self.trajectories is None:
             self.trajectories = [step_record]
         else:
@@ -256,11 +256,11 @@ class BalloonPoppingEnv(gym.Env):
         # An episode is done iff reaches max time or end of trajectory
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            print("Terminated: Reached max time")
+            # print("Terminated: Reached max time")
             self._rocket_flight.post_process_simulation()
             self._rocket_flight.initialize_prints_plots()
-        elif _rocket_finished:
-            print("Terminated: Rocket flight finished")
+        # elif _rocket_finished:
+        #     print("Terminated: Rocket flight finished")
         terminated = _timeout or _rocket_finished
 
         # Calculate reward based on newly popped balloons at this step
