@@ -1,28 +1,24 @@
 import numpy as np
+from pathlib import Path
 
 from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
-from BalloonPoppingGymEnv.utils.setup_logging import setup_logging
 from BalloonPoppingGymEnv.utils.scene import Scene
 from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward
 
 scenario_number = 0
 
 def run_for_development():
-
-    # Load scenario parameters
     scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
+    env = BalloonPoppingEnv(render_mode=None, parameters=scenario_parameters)
 
-    # Create environment with scenario parameters turn off rendering to make own plots
-    env = BalloonPoppingEnv(render_mode='matplotlib', parameters=scenario_parameters)
-
-    # Instantiate agent with given parameters and any additional user kwargs
-    agent = RLAgent(given_parameters)
+    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1444" / "checkpoints"
+    model_path = checkpoint_dir / "rl_model_900000_steps.zip"
+    agent = RLAgent(given_parameters, str(model_path))
 
     scene = Scene()
 
-    # use seed=None to randomize environment
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
 
@@ -49,5 +45,4 @@ def run_for_development():
     scene.draw()
 
 if __name__ == "__main__":
-    setup_logging()
     run_for_development()
