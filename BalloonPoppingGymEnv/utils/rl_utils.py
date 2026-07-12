@@ -1,5 +1,12 @@
 import numpy as np
 
+# Action-repeat / frame-skip: the RL guidance policy emits one command every
+# RL_FRAME_SKIP simulation steps; the inner attitude controller still runs every
+# step. With time_step=0.01s this makes each RL decision cover 0.1s, extending
+# the effective planning horizon by 10x for the same gamma. Must be identical in
+# the training env (RLNavigatorEnv) and the deployment path (RLAgent).
+RL_FRAME_SKIP = 15
+
 def compute_rl_observation(rocket_state, target_state):
     rel_pos = target_state[0:3] - rocket_state[0:3]
     rel_vel = (target_state[3:6] if target_state.size >= 6 else np.zeros(3)) - rocket_state[3:6]
@@ -8,6 +15,12 @@ def compute_rl_observation(rocket_state, target_state):
     z = rocket_state[2]
 
     rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [z]]).astype(np.float32)
+
+    # The estimator can emit NaN/inf on invalid states (pre-launch, post-crash,
+    # no valid target). Never feed those to the policy: a single NaN observation
+    # produces NaN network outputs. The deployment path guards this in
+    # navigator.compute; the env must guard it here for train/deploy symmetry.
+    rl_obs = np.nan_to_num(rl_obs, nan=0.0, posinf=1e4, neginf=-1e4)
 
     return rl_obs
 
@@ -20,94 +33,73 @@ def compute_rl_reward(
     terminated: bool,
     action_delta: np.ndarray
 ) -> float:
-    # =========================================================================
-    # 1. Sparse Terminal Events & Absolute Objective Overlords
-    # =========================================================================
-    # Priority A: Instantaneous balloon popping success event
-    if reward > 0:
-        return 1000.0 * reward
-
-    # Priority B: Episode termination handling (Out of fuel / Crashed / Timed out)
-    if terminated:
-        total_popped = info.get("popped_count", 0)
-        # Static baseline penalty for dying. No survival_bonus to eliminate hover exploits.
-        # Heavily amplified tactical bonus to ensure winning strictly dominates the policy.
-        return float(-100.0 + total_popped * 2000.0)
-
-    # Extract kinematic states safely for continuous shaping rewards
     rocket_pos = rocket_state[0:3]
     rocket_vel = rocket_state[3:6]
     z = rocket_state[2]
-
-    # Target-relative tactical geometry calculation
-    target_z = target_state[2]
-    is_target_above = target_z > z
     rel_pos = target_state[0:3] - rocket_pos
-    distance = np.linalg.norm(rel_pos)
+    distance = float(np.linalg.norm(rel_pos))
+    # Invalid geometry (NaN from a terminal/crashed state) must never yield a NaN
+    # reward: a single NaN in the rollout buffer corrupts the PPO update and turns
+    # the whole policy's outputs into NaN. Treat it as "far away".
+    if not np.isfinite(distance):
+        distance = 300.0
 
     # =========================================================================
-    # 2. Continuous Tracking Hub (Fractional & Soft-Clipped Strategy)
+    # 1. Sparse terminal events (dominant objective signals)
     # =========================================================================
-    # Bounded fractional distance shaping. Strictly maps between 0.0 and -1.0.
-    # Eliminates spatial penalty explosions regardless of how far the rocket drifts.
-    distance_penalty = -1.0 * (distance / (distance + 100.0))
+    # Priority A: balloon popped this step. Returns before the termination check
+    # so clearing the last balloon is a pure success, never a "death". This is
+    # the single reward channel for pops (no duplicate terminal bonus), so credit
+    # assignment is unambiguous.
+    if reward > 0:
+        return 1000.0 * reward
 
-    # Kinematic Alignment via Vector Dot Product (Handles both UP and DOWN targets)
+    # Priority B: episode ended without a pop (fuel out / crash / timeout).
+    # Pops were already banked immediately above, so we only shape *how* it ended:
+    # a base cost plus a term that rewards having gotten close to a target before
+    # dying. There is NO per-step cost of living (see below), so ending early only
+    # forfeits future pop opportunities -- the agent is never better off dying.
+    if terminated:
+        return float(-100.0 - 1.0 * min(distance, 300.0))
+
+    # =========================================================================
+    # 2. Progress shaping (potential-based via closing speed)
+    # =========================================================================
+    # closing_speed = -d(distance)/dt: >0 approaching, <0 receding. Because it is
+    # the time-derivative of distance, integrating it telescopes to the net change
+    # in distance, so it cannot be farmed by loitering (unlike an absolute-distance
+    # penalty, which taxed every step and made suicide optimal). Symmetric clip
+    # keeps PPO gradients bounded. Handles targets above and below identically.
     alignment_reward = 0.0
     if distance > 1e-3:
         unit_rel_pos = rel_pos / distance
-        # closing_speed > 0 means chasing towards target; < 0 means escaping from target
-        closing_speed = np.dot(rocket_vel, unit_rel_pos)
-
-        if closing_speed > 0:
-            alignment_reward = 0.2 * closing_speed
-        else:
-            # Soft-clipped drift penalty to maintain mild guidance gradients without shattering PPO
-            alignment_reward = max(0.2 * closing_speed, -0.5)
+        closing_speed = float(np.dot(rocket_vel, unit_rel_pos))
+        alignment_reward = float(np.clip(0.15 * closing_speed, -0.5, 0.5))
 
     # =========================================================================
-    # 3. Regularizations & Direct Time Efficiency Drains
+    # 3. Light regularizers (no unconditional per-step penalty)
     # =========================================================================
-    smoothness_penalty = -0.05 * np.linalg.norm(action_delta)
-    time_penalty = -0.05  # Constant pressure forces the rocket to intercept ASAP
+    # Action smoothness only; urgency comes from gamma discounting, not a flat
+    # time penalty (which reintroduces the cost-of-living / suicide incentive).
+    smoothness_penalty = -0.02 * float(np.linalg.norm(action_delta))
 
     # =========================================================================
-    # 4. Dynamic Physics Protection (Relative Log Strategy)
+    # 4. Low-altitude attitude guard (true tilt from the quaternion)
     # =========================================================================
-    stability_reward = 0.0
-    v_z = rocket_vel[2]
-
-    if v_z < 0.0:
-        if is_target_above:
-            # Unintentional falling: Log-compressed to shield gradients during terminal dives
-            falling_speed = abs(v_z)
-            stability_reward = -0.3 * float(np.log1p(falling_speed))
-        else:
-            # Intentional diving: Rewarded for actively pursuing lower altitude objectives
-            stability_reward = 0.02 * abs(v_z)
-    else:
-        if is_target_above:
-            # Intentional climbing: Rewarded for pursuing higher altitude objectives
-            stability_reward = 0.05 * v_z
-        else:
-            # Unintentional climbing away from lower targets
-            stability_reward = -0.1 * v_z
-
-    # =========================================================================
-    # 5. Low-Altitude Ground Proximity Guard
-    # =========================================================================
+    # Penalize the rocket lying over near the ground. cos_tilt is the world-up
+    # component of the body up-axis (1 = upright, 0 = horizontal). Fixes the old
+    # guard that compared a speed magnitude against signed v_z.
     tilt_penalty = 0.0
-    horizontal_speed = np.linalg.norm(rocket_vel[0:2])
-    if z < 150.0 and horizontal_speed > v_z:
-        tilt_penalty = -0.2
+    quat = rocket_state[9:13]
+    if not np.isnan(quat).any():
+        qn = float(np.linalg.norm(quat))
+        if qn > 1e-9:
+            _, qx, qy, _ = quat / qn
+            cos_tilt = 1.0 - 2.0 * (qx * qx + qy * qy)
+            if z < 150.0 and cos_tilt < 0.707:  # tilted more than ~45 deg
+                tilt_penalty = -0.2 * (0.707 - cos_tilt)
 
-    # Sum total unified continuous shaping feedback surface
-    total_reward = (
-        distance_penalty
-        + alignment_reward
-        + smoothness_penalty
-        + time_penalty
-        + stability_reward
-        + tilt_penalty
-    )
+    total_reward = alignment_reward + smoothness_penalty + tilt_penalty
+    if not np.isfinite(total_reward):
+        total_reward = 0.0
     return float(total_reward)

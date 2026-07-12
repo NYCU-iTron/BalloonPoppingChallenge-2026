@@ -5,7 +5,7 @@ import numpy as np
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_observation, compute_rl_reward
+from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_observation, compute_rl_reward, RL_FRAME_SKIP
 
 class RLNavigatorEnv(gym.Wrapper):
     def __init__(self, env, given_parameters):
@@ -73,34 +73,48 @@ class RLNavigatorEnv(gym.Wrapper):
         a_cmd_world = rl_action[0:3]
         desired_throttle = float(rl_action[3])
 
-        tvc, roll, throttle = self.controller.compute(self.rocket_state, a_cmd_world, desired_throttle)
-
-        is_launched = self.selector.should_launch(self.observation)
-        launch_inclination_heading = self.selector.get_launch_heading(self.observation)
-
-        action = {
-            "launch": is_launched,
-            "launch_inclination_heading": launch_inclination_heading,
-            "tvc": tvc,
-            "roll": roll,
-            "throttle": throttle,
-        }
-
-        self.observation, reward, terminated, truncated, info = self.env.step(action)
-
-        # Update states
-        self.rocket_state = self.estimator.estimate_rocket(self.observation)
-        balloon_states = self.estimator.predict_balloons(self.observation)
-
-        # Update target
-        target_idx = self.selector.select_target(balloon_states, self.rocket_state)
-        target_state = self.estimator.predict_target(self.observation, target_idx)
-
+        # Smoothness penalty is charged once per policy decision (not per sim step).
         action_delta = rl_action - self.prev_action
         self.prev_action = rl_action.copy()
 
-        rl_obs = compute_rl_observation(self.rocket_state, target_state)
-        rl_reward = compute_rl_reward(self.observation, info, self.rocket_state, target_state,
-                                      reward, terminated, action_delta)
+        total_rl_reward = 0.0
+        terminated = truncated = False
+        info = {}
+        target_state = None
 
-        return rl_obs, rl_reward, terminated, truncated, info
+        # Action-repeat: hold the guidance command for RL_FRAME_SKIP sim steps
+        # while the inner attitude/rate controller re-runs every step.
+        for i in range(RL_FRAME_SKIP):
+            tvc, roll, throttle = self.controller.compute(self.rocket_state, a_cmd_world, desired_throttle)
+
+            is_launched = self.selector.should_launch(self.observation)
+            launch_inclination_heading = self.selector.get_launch_heading(self.observation)
+
+            action = {
+                "launch": is_launched,
+                "launch_inclination_heading": launch_inclination_heading,
+                "tvc": tvc,
+                "roll": roll,
+                "throttle": throttle,
+            }
+
+            self.observation, reward, terminated, truncated, info = self.env.step(action)
+
+            # Update states
+            self.rocket_state = self.estimator.estimate_rocket(self.observation)
+            balloon_states = self.estimator.predict_balloons(self.observation)
+
+            # Update target
+            target_idx = self.selector.select_target(balloon_states, self.rocket_state)
+            target_state = self.estimator.predict_target(self.observation, target_idx)
+
+            step_delta = action_delta if i == 0 else np.zeros_like(action_delta)
+            total_rl_reward += compute_rl_reward(self.observation, info, self.rocket_state, target_state,
+                                                 reward, terminated, step_delta)
+
+            if terminated or truncated:
+                break
+
+        rl_obs = compute_rl_observation(self.rocket_state, target_state)
+
+        return rl_obs, total_rl_reward, terminated, truncated, info

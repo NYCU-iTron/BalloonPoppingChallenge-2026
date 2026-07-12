@@ -11,33 +11,20 @@ class RLNavigator:
         self.given_parameters = given_parameters
 
         agent_root = Path(__file__).resolve().parent.parent
-        model_path = agent_root / "models" / "rl_navigator_0711.zip"
+        model_path = agent_root / "models" / "final_model.zip"
         self.model = PPO.load(str(model_path), device="cpu")
 
     def reset(self):
         """Resets sequential tracking variables if necessary."""
         pass
 
-    def compute(self, target_state: np.ndarray | None, rocket_state: np.ndarray) -> tuple[None, None] | tuple[np.ndarray, float]:
-        """
-        Compute the world-frame lateral acceleration command and throttle using the RL policy.
-
-        Parameters
-        ----------
-        target_state : np.ndarray | None
-            Predicted target state [pos(3), vel(3)] from the estimator, or None.
-        rocket_state : np.ndarray
-            Estimated state [pos(3), vel(3), acc(3), quat(4), gyro(3)].
-
-        Returns
-        -------
-        a_cmd_world : np.ndarray | None
-            Desired lateral acceleration in the world frame, shape (3,). None when invalid.
-        throttle : float | None
-            Energy-management throttle in [0, 1]. None when invalid.
-        """
+    def compute(self, target_state: np.ndarray, rocket_state: np.ndarray) -> tuple[None, None] | tuple[np.ndarray, float]:
         # Defensive fallback validation gate checks
-        if target_state is None or np.isnan(target_state).any() or self.model is None:
+        if np.isnan(target_state).any() or np.isnan(rocket_state).any():
+            return None, None
+
+        if self.model is None:
+            self.logger.warning("RL model is not loaded. Returning None for action.")
             return None, None
 
         rl_obs = compute_rl_observation(rocket_state, target_state)
@@ -45,6 +32,7 @@ class RLNavigator:
         # --- Neural Network Model Inference Execution ---
         # deterministic=True disables exploration noise to output optimal actions
         rl_action, _states = self.model.predict(rl_obs, deterministic=True)
+        print(f"RL Action: {rl_action}")
 
         # Extract operational output parameters mappings
         a_cmd_world = rl_action[0:3]

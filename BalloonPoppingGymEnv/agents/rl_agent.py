@@ -6,6 +6,7 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.rl_navigator import RLNavigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
+from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
 class RLAgent(BaseAgent):
@@ -23,30 +24,56 @@ class RLAgent(BaseAgent):
         self.target_state = None
         self.rl_action = None
 
+        # Action-repeat bookkeeping (mirrors RLNavigatorEnv): re-query the policy
+        # once every RL_FRAME_SKIP control steps and hold the command in between.
+        self._skip_counter = 0
+        self._cached_a_cmd = None
+        self._cached_throttle = None
+
     def reset(self) -> None:
         self.estimator.reset()
         self.selector.reset()
         self.navigator.reset()
         self.controller.reset()
 
+        self._skip_counter = 0
+        self._cached_a_cmd = None
+        self._cached_throttle = None
+
     def get_action(self, observation: dict) -> dict:
-        rocket_state = self.estimator.estimate_rocket(observation)
-        balloon_states = self.estimator.predict_balloons(observation)
-
-        target_idx = self.selector.select_target(balloon_states, rocket_state)
-        target_state = self.estimator.predict_target(observation, target_idx)
-
-        a_cmd, desired_throttle = self.navigator.compute(target_state, rocket_state)
-        tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
-
-        # Set launch parameters
         is_launched = self.selector.should_launch(observation)
         launch_inclination_heading = self.selector.get_launch_heading(observation)
 
-        # Store for reward computation
+        if not is_launched:
+            return {
+                "launch": False,
+                "launch_inclination_heading": np.array([90.0, 0.0]),
+                "tvc": np.zeros(2),
+                "roll": 0.0,
+                "throttle": self.controller.throttle_min,
+            }
+
+        rocket_state = self.estimator.estimate_rocket(observation)
+
+        # Re-query the RL guidance policy only once per RL_FRAME_SKIP control
+        # steps; hold the previous command otherwise. The inner controller below
+        # still runs every step.
+        if self._skip_counter % RL_FRAME_SKIP == 0 or self._cached_a_cmd is None:
+            balloon_states = self.estimator.predict_balloons(observation)
+            target_idx = self.selector.select_target(balloon_states, rocket_state)
+            target_state = self.estimator.predict_target(observation, target_idx)
+            self._cached_a_cmd, self._cached_throttle = self.navigator.compute(target_state, rocket_state)
+            self.target_state = target_state
+        self._skip_counter += 1
+
+        a_cmd = self._cached_a_cmd
+        desired_throttle = self._cached_throttle
+        tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
+
         self.rocket_state = rocket_state
-        self.target_state = target_state
-        self.rl_action = np.concatenate((a_cmd, [desired_throttle]))
+        self.rl_action = (
+            np.concatenate((a_cmd, [desired_throttle])) if a_cmd is not None else np.zeros(4, dtype=np.float32)
+        )
 
         return {
             "launch": is_launched,
