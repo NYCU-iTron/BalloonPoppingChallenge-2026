@@ -19,6 +19,7 @@ dependencies = [
     "tensorboard",
     "tqdm",
     "rich",
+    "huggingface_hub",
 ]
 
 [project.optional-dependencies]
