@@ -134,7 +134,7 @@ def evaluate_scenario(
     env = BalloonPoppingEnv(render_mode=render_mode, parameters=scenario_parameters)
 
     # Instantiate agent with given parameters and any additional user kwargs
-    agent = agent_class(given_parameters, **(agent_kwargs or {}))
+    agent = agent_class(given_parameters)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
