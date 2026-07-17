@@ -38,6 +38,8 @@ def main():
     horizon_seconds = 40.0
     gamma = 1.0 - (RL_FRAME_SKIP * time_step) / horizon_seconds
 
+    entropy_coeff = 0.005
+
     n_steps = 512
     batch_size = 512
     assert (n_steps * n_train_envs) % batch_size == 0, \
@@ -96,7 +98,7 @@ def main():
         n_epochs=10,
         gamma=gamma,
         gae_lambda=0.95,
-        ent_coef=0.001,
+        ent_coef=entropy_coeff,
         policy_kwargs=policy_kwargs,
         tensorboard_log=str(run_dir / "tensorboard")
     )
