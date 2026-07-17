@@ -1,0 +1,11 @@
+scenario_number: 0
+render_mode: "matplotlib" # "matplotlib", "vpython", or null
+agent_module_path: "./BalloonPoppingGymEnv/agents/rl_agent.py" # Path to python module defining agent.
+agent_class_name: "RLAgent" # Name of agent class defined in agent_module_path.
+agent_name: "RL Agent" # Identifier name for logging purposes. The same agent class with different inputs can lead to different behaviors, so you should give each instantiation their own name
+agent_kwargs:
+  rate_targets: [0.0, 0.0, 0.0]
+  launch_time: 1
+team_name: TASTI_iTron_space
+team_secret: 73dea3aad7ba57e83abccbdfa561d19dc0e62ded2149419cf9c7eb3c7153c376
+leaderboard_submission: true
