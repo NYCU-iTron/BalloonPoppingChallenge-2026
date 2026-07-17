@@ -13,9 +13,9 @@ def run_for_development():
     scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
     env = BalloonPoppingEnv(render_mode="matplotlib", parameters=scenario_parameters)
 
-    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1444" / "checkpoints"
-    model_path = checkpoint_dir / "rl_model_900000_steps.zip"
-    agent = RLAgent(given_parameters, str(model_path))
+    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1852" / "checkpoints"
+    model_path = checkpoint_dir / "rl_model_15000000_steps.zip"
+    agent = RLAgent(given_parameters, model_path)
 
     scene = Scene()
 
