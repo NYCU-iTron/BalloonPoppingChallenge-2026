@@ -230,16 +230,26 @@ class BalloonPoppingEnv(gym.Env):
             self._rocket_flight.rocket.tvc.gimbal_angle_x = action["tvc"][0]
             self._rocket_flight.rocket.tvc.gimbal_angle_y = action["tvc"][1]
             self._rocket_flight.rocket.throttle_control.throttle = action["throttle"]
-            self._rocket_flight.step_simulation()
-            _sensor = self._rocket_flight.sensors
-            self._rocket_sensors[:3] = _sensor[0].measurement  # gyro
-            self._rocket_sensors[3:6] = _sensor[1].measurement  # accel
-            self._rocket_sensors[6:12] = _sensor[2].measurement  # gnss
-            self._rocket_states = self._rocket_flight.y_sol[:]
-            _rocket_finished = self._rocket_flight._step_state["finished"]
+            try:
+                self._rocket_flight.step_simulation()
+                _sensor = self._rocket_flight.sensors
+                self._rocket_sensors[:3] = _sensor[0].measurement  # gyro
+                self._rocket_sensors[3:6] = _sensor[1].measurement  # accel
+                self._rocket_sensors[6:12] = _sensor[2].measurement  # gnss
+                self._rocket_states = self._rocket_flight.y_sol[:]
+                _rocket_finished = self._rocket_flight._step_state["finished"]
 
-            # detect pops
-            self._detect_pops(previous_balloon_positions, previous_rocket_position)
+                # detect pops
+                self._detect_pops(previous_balloon_positions, previous_rocket_position)
+            except Exception as exc:
+                # rocketpy's flight integrator can raise on numerical edge cases
+                # (e.g. the cubic impact-time solver dividing by zero at landing).
+                # It fires while detecting ground impact, so ending the flight is
+                # the correct outcome - and it must never crash the worker/training.
+                # Keep the last valid rocket state (not overwritten above).
+                print(f"[BalloonPoppingEnv] flight step failed "
+                      f"({type(exc).__name__}: {exc}); ending episode.")
+                _rocket_finished = True
 
         # Append rocket and balloon states to trajectories for logging
         step_record = {
