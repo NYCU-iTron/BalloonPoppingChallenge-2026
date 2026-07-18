@@ -7,16 +7,16 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.callbacks import CallbackList, EvalCallback, CheckpointCallback
 
-from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
 from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
-from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
 from BalloonPoppingGymEnv.utils.metrics_callback import MetricsCallback
 from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
-def make_custom_env(scenario_params, given_params):
+def make_custom_env(scenario_params, given_params, pool_path):
     def _init():
-        raw_env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
-        return RLNavigatorEnv(raw_env, given_params)
+        raw_env = PoolEnv(render_mode=None, parameters=scenario_params)
+        return RLNavigatorEnv(raw_env, given_params, pool_path)
     return _init
 
 def main():
@@ -48,22 +48,28 @@ def main():
           f"~{total_timesteps // (n_steps * n_train_envs)} PPO updates")
 
     # ------------------------------- Environments ------------------------------- #
-    scenario_parameters, given_parameters = load_scenario_parameters(0)
+    scenario_parameters, given_parameters = load_pool_parameters()
+
+    scripts_dir = Path(__file__).resolve().parent
+    pool_path = scripts_dir / "pool_level_1_easy.npy"
+
+    seed = 0
 
     train_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters),
+        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
         n_envs=n_train_envs,
+        seed=seed,
         vec_env_cls=SubprocVecEnv
     )
 
     eval_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters),
+        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
         n_envs=1,
+        seed=seed + n_train_envs,
         vec_env_cls=SubprocVecEnv
     )
 
     # -------------------------------- Directories ------------------------------- #
-    scripts_dir = Path(__file__).resolve().parent
     runs_dir = scripts_dir / "runs"
     run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")
     run_dir.mkdir(parents=True, exist_ok=True)
