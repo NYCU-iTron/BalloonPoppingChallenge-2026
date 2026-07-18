@@ -8,13 +8,19 @@ from BalloonPoppingGymEnv.agents.gnc.controller import Controller
 from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_observation, compute_rl_reward, RL_FRAME_SKIP
 
 class RLNavigatorEnv(gym.Wrapper):
-    def __init__(self, env, given_parameters):
+    def __init__(self, env, given_parameters, pool_path):
         super().__init__(env)
         self.given_parameters = given_parameters
 
         self.estimator = Estimator(given_parameters)
         self.selector = Selector(given_parameters)
         self.controller = Controller(given_parameters)
+
+        # Balloon trajectory pool
+        self._pool = np.load(pool_path, mmap_mode="r")
+        self._pool_capacity = self._pool.shape[0]
+        self._num_balloons = self.env.unwrapped.balloon_parameters["num"]
+        self._sample_rng = np.random.default_rng()
 
         # Action:
         #   3D acceleration command (3)
@@ -34,8 +40,21 @@ class RLNavigatorEnv(gym.Wrapper):
             low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32
         )
 
-    def reset(self, **kwargs):
-        self.observation, info = self.env.reset(**kwargs)
+    def _resample_and_inject(self):
+        """Sample a fresh balloon subset from the pool and hand it to the inner env."""
+        indices = self._sample_rng.choice(
+            self._pool_capacity, size=self._num_balloons, replace=False
+        )
+
+        tracks = np.asarray(self._pool[indices])
+        self.env.unwrapped.update_source_trajectories(tracks)
+
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            self._sample_rng = np.random.default_rng(seed)
+
+        self._resample_and_inject()
+        self.observation, info = self.env.reset(seed=seed, options=options)
 
         self.estimator.reset()
         self.selector.reset()
@@ -53,7 +72,8 @@ class RLNavigatorEnv(gym.Wrapper):
             self.observation, reward, terminated, truncated, info = self.env.step(idle_action)
 
             if terminated or truncated:
-                self.observation, info = self.env.reset(**kwargs)
+                self._resample_and_inject()
+                self.observation, info = self.env.reset(options=options)
                 break
 
         # Update states
@@ -73,7 +93,7 @@ class RLNavigatorEnv(gym.Wrapper):
         a_cmd_world = rl_action[0:3]
         desired_throttle = float(rl_action[3])
 
-        # Smoothness penalty is charged once per policy decision (not per sim step).
+        # Smoothness penalty
         action_delta = rl_action - self.prev_action
         self.prev_action = rl_action.copy()
 
@@ -82,8 +102,6 @@ class RLNavigatorEnv(gym.Wrapper):
         info = {}
         target_state = None
 
-        # Action-repeat: hold the guidance command for RL_FRAME_SKIP sim steps
-        # while the inner attitude/rate controller re-runs every step.
         for i in range(RL_FRAME_SKIP):
             tvc, roll, throttle = self.controller.compute(self.rocket_state, a_cmd_world, desired_throttle)
 
