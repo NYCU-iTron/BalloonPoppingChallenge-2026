@@ -1,6 +1,6 @@
 # Scenario metadata
 scenario:
-  number: 0
+  number: 2
   random_seed: 0 # Use null to enable random seeding
 
 # Launch site and atmosphere setup
@@ -23,7 +23,7 @@ simulation:
 
 # Balloon model and uncertainty parameters
 balloon:
-  release_interval: 1 # no actual effect in scenario 0
+  release_interval: 1 # (sec) time interval between balloon releases
   # Custom balloon coordinates [x, y, z] in meters (ENU sim frame, z = height
   # above sea level). When set, the number of balloons equals the number of
   # coordinates listed here and overrides `num` below. Set to null to fall back

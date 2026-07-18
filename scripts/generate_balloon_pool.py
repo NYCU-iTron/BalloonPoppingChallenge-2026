@@ -17,12 +17,12 @@ base_config = {
 }
 
 if __name__ == "__main__":
-    script_dir = Path(__file__).parent
+    script_dir = Path(__file__).resolve().parent
 
     level_1_cfg = copy.deepcopy(base_config)
     level_1_cfg["balloon"]["stochastic"].update({
-        "latitude_std": 0.00005,
-        "longitude_std": 0.00005,
+        "latitude_std": 0.0001,
+        "longitude_std": 0.0001,
         "mass_std": 0.01,
         "volume_std": 0.01,
         "inertia_std": 0.005
