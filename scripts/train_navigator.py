@@ -4,7 +4,7 @@ from datetime import datetime
 from tensorboard import program
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CallbackList, EvalCallback, CheckpointCallback
 
 from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
@@ -19,20 +19,24 @@ def make_custom_env(scenario_params, given_params, pool_path):
         return RLNavigatorEnv(raw_env, given_params, pool_path)
     return _init
 
+def linear_schedule(initial_value, final_value):
+    def schedule(progress_remaining):
+        return final_value + progress_remaining * (initial_value - final_value)
+    return schedule
+
 def main():
     # -------------------------------- Parameters -------------------------------- #
-    # Dependent on CPU cores available
-    n_train_envs = 24
+    n_train_envs = 26
+    total_timesteps = 4_000_000
 
-    total_timesteps = 15_000_000
-    n_evals = 30
-    n_saves = 10
+    n_steps = 1024
+    batch_size = 1024
+    assert (n_steps * n_train_envs) % batch_size == 0, \
+        "batch_size must divide n_steps * n_train_envs"
+    print(f"[Config] n_steps={n_steps}, buffer={n_steps * n_train_envs}, "
+          f"~{total_timesteps // (n_steps * n_train_envs)} PPO updates")
 
-    eval_freq = max(total_timesteps // (n_train_envs * n_evals), 1)
-    save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
-    print(f"[Config] eval_freq={eval_freq}, save_freq={save_freq}")
-
-    policy_size = 128
+    policy_size = 256
 
     time_step = 0.01
     horizon_seconds = 40.0
@@ -40,12 +44,11 @@ def main():
 
     entropy_coeff = 0.005
 
-    n_steps = 512
-    batch_size = 512
-    assert (n_steps * n_train_envs) % batch_size == 0, \
-        "batch_size must divide n_steps * n_train_envs"
-    print(f"[Config] n_steps={n_steps}, buffer={n_steps * n_train_envs}, "
-          f"~{total_timesteps // (n_steps * n_train_envs)} PPO updates")
+    n_evals = 30
+    n_saves = 10
+    eval_freq = max(total_timesteps // (n_train_envs * n_evals), 1)
+    save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
+    print(f"[Config] eval_freq={eval_freq}, save_freq={save_freq}")
 
     # ------------------------------- Environments ------------------------------- #
     scenario_parameters, given_parameters = load_pool_parameters()
@@ -61,12 +64,35 @@ def main():
         seed=seed,
         vec_env_cls=SubprocVecEnv
     )
+    # norm_obs must stay False: the deployment path (RLNavigator) feeds the
+    # policy raw observations, so normalizing them here would break
+    # train/deploy symmetry. Reward normalization is training-only and tames
+    # the +1000 pop spikes for stable PPO value updates; Monitor still logs
+    # raw episode rewards, so ep_rew_mean stays interpretable.
+    train_env = VecNormalize(
+        train_env,
+        training=True,
+        norm_obs=False,
+        norm_reward=True,
+        clip_reward=10.0,
+        gamma=gamma,
+    )
 
     eval_env = make_vec_env(
         env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
         n_envs=1,
         seed=seed + n_train_envs,
         vec_env_cls=SubprocVecEnv
+    )
+    # EvalCallback requires the eval env to mirror the train env's wrapper
+    # stack (it syncs normalization stats each eval). Frozen, with raw rewards
+    # so eval metrics stay in real units.
+    eval_env = VecNormalize(
+        eval_env,
+        training=False,
+        norm_obs=False,
+        norm_reward=False,
+        gamma=gamma,
     )
 
     # -------------------------------- Directories ------------------------------- #
@@ -98,7 +124,7 @@ def main():
         train_env,
         verbose=1,
         device="cpu",
-        learning_rate=3e-4,
+        learning_rate=linear_schedule(3e-4, 3e-5),
         n_steps=n_steps,
         batch_size=batch_size,
         n_epochs=10,
@@ -115,7 +141,7 @@ def main():
         save_path=str(run_dir / "checkpoints"),
         name_prefix="rl_model",
         save_replay_buffer=False,
-        save_vecnormalize=False,
+        save_vecnormalize=True,
     )
 
     eval_callback = EvalCallback(
@@ -139,6 +165,9 @@ def main():
     finally:
         final_model_path = run_dir / "final_model.zip"
         model.save(str(final_model_path))
+        # Reward-normalization running stats; needed to resume training with
+        # a consistent reward scale (not needed for deployment: norm_obs=False).
+        train_env.save(str(run_dir / "vecnormalize.pkl"))
         print(f"[Training] final model saved -> {final_model_path}")
 
 

@@ -5,7 +5,38 @@ import numpy as np
 # step. With time_step=0.01s this makes each RL decision cover 0.1s, extending
 # the effective planning horizon by 10x for the same gamma. Must be identical in
 # the training env (RLNavigatorEnv) and the deployment path (RLAgent).
-RL_FRAME_SKIP = 15
+RL_FRAME_SKIP = 5
+
+# Residual guidance: the RL action is a CORRECTION on top of the PN guidance
+# law, not an absolute command. Zero action = pure PN (a proven intercept
+# baseline), so an untrained policy already flies sensibly and PPO explores
+# around a working behavior instead of around free fall. Bounds are shared by
+# the training env (action space) and the deployment path (clipping) so the
+# semantics stay identical on both sides.
+RL_RESIDUAL_ACCEL_LIMIT = 10.0     # (m/s^2) lateral correction authority
+RL_RESIDUAL_THROTTLE_LIMIT = 0.3   # throttle correction authority
+
+def compute_target_distance(rocket_state, target_state):
+    """Rocket-to-target distance with the same finite guard as the reward.
+
+    Invalid geometry (pre-launch / crashed / no target -> NaN states) maps to a
+    constant 300 m so consumers never see NaN and shaping deltas vanish there.
+    """
+    distance = float(np.linalg.norm(target_state[0:3] - rocket_state[0:3]))
+    if not np.isfinite(distance):
+        distance = 300.0
+    return distance
+
+def failure_penalty(closest_distance):
+    """Terminal cost for a FAILED episode (rocket crash or fly-by miss).
+
+    Graded by the closest approach achieved this episode, not the distance at the
+    moment of death: a run that reaches the balloon and then overshoots into a
+    crash must be credited for getting close, otherwise the reward would teach the
+    agent to avoid approaching whenever it risks overshooting. Both failure modes
+    (crash in compute_rl_reward, miss in RLNavigatorEnv) share this one formula.
+    """
+    return float(-100.0 - min(closest_distance, 300.0))
 
 def compute_rl_observation(rocket_state, target_state):
     rel_pos = target_state[0:3] - rocket_state[0:3]
@@ -31,18 +62,15 @@ def compute_rl_reward(
     target_state: np.ndarray,
     reward: int,
     terminated: bool,
-    action_delta: np.ndarray
+    action_delta: np.ndarray,
+    prev_distance: float | None = None,
+    closest_distance: float | None = None
 ) -> float:
-    rocket_pos = rocket_state[0:3]
-    rocket_vel = rocket_state[3:6]
     z = rocket_state[2]
-    rel_pos = target_state[0:3] - rocket_pos
-    distance = float(np.linalg.norm(rel_pos))
-    # Invalid geometry (NaN from a terminal/crashed state) must never yield a NaN
-    # reward: a single NaN in the rollout buffer corrupts the PPO update and turns
-    # the whole policy's outputs into NaN. Treat it as "far away".
-    if not np.isfinite(distance):
-        distance = 300.0
+    # NaN-guarded distance (see compute_target_distance): a single NaN in the
+    # rollout buffer corrupts the PPO update and turns the whole policy's
+    # outputs into NaN.
+    distance = compute_target_distance(rocket_state, target_state)
 
     # =========================================================================
     # 1. Sparse terminal events (dominant objective signals)
@@ -54,27 +82,31 @@ def compute_rl_reward(
     if reward > 0:
         return 1000.0 * reward
 
-    # Priority B: episode ended without a pop (fuel out / crash / timeout).
-    # Pops were already banked immediately above, so we only shape *how* it ended:
-    # a base cost plus a term that rewards having gotten close to a target before
-    # dying. There is NO per-step cost of living (see below), so ending early only
-    # forfeits future pop opportunities -- the agent is never better off dying.
+    # Priority B: episode ended without a pop (fuel out / crash). Pops were
+    # already banked immediately above, so we only shape *how* it ended: a base
+    # cost plus a term that rewards having gotten close before dying. Uses the
+    # episode's closest approach when the caller tracks it (RLNavigatorEnv),
+    # otherwise the current distance. There is NO per-step cost of living, so
+    # ending early only forfeits future pops -- the agent is never better off dying.
     if terminated:
-        return float(-100.0 - 1.0 * min(distance, 300.0))
+        fail_distance = closest_distance if closest_distance is not None else distance
+        return failure_penalty(fail_distance)
 
     # =========================================================================
-    # 2. Progress shaping (potential-based via closing speed)
+    # 2. Progress shaping (potential-based via distance delta)
     # =========================================================================
-    # closing_speed = -d(distance)/dt: >0 approaching, <0 receding. Because it is
-    # the time-derivative of distance, integrating it telescopes to the net change
-    # in distance, so it cannot be farmed by loitering (unlike an absolute-distance
-    # penalty, which taxed every step and made suicide optimal). Symmetric clip
-    # keeps PPO gradients bounded. Handles targets above and below identically.
+    # r = k * (d_prev - d_curr): the per-step *change* in distance, so the sum
+    # telescopes to the net distance closed regardless of how many steps it took.
+    # This is speed-invariant -- unlike a clipped closing-speed bonus, which paid
+    # a fixed amount per step spent approaching and therefore paid MORE for
+    # approaching slowly (a loiter-farming exploit). The clip is in distance
+    # units (max plausible per-step displacement), which also caps the spurious
+    # jump when the tracked target switches. Closing 300 m earns ~= +60 total,
+    # keeping shaping a signpost far below the +1000 pop reward.
     alignment_reward = 0.0
-    if distance > 1e-3:
-        unit_rel_pos = rel_pos / distance
-        closing_speed = float(np.dot(rocket_vel, unit_rel_pos))
-        alignment_reward = float(np.clip(0.15 * closing_speed, -0.5, 0.5))
+    if prev_distance is not None and np.isfinite(prev_distance):
+        distance_delta = float(np.clip(prev_distance - distance, -3.0, 3.0))
+        alignment_reward = 0.2 * distance_delta
 
     # =========================================================================
     # 3. Light regularizers (no unconditional per-step penalty)

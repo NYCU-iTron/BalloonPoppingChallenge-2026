@@ -5,7 +5,7 @@ from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
 from BalloonPoppingGymEnv.utils.scene import Scene
-from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward
+from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward, compute_target_distance
 
 scenario_number = 0
 
@@ -23,6 +23,7 @@ def run_for_development():
     terminated = False
 
     prev_rl_action = np.zeros(4, dtype=np.float32)
+    prev_distance = None
     rl_reward = 0.0
 
     while not terminated:
@@ -39,7 +40,8 @@ def run_for_development():
             break
 
         rl_reward += compute_rl_reward(observation, info, agent.rocket_state, agent.target_state,
-                                       reward, terminated, action_delta)
+                                       reward, terminated, action_delta, prev_distance)
+        prev_distance = compute_target_distance(agent.rocket_state, agent.target_state)
 
     print(f"Total RL Reward: {rl_reward}")
     scene.draw()

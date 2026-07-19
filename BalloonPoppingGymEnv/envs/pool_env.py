@@ -262,15 +262,19 @@ class PoolEnv(gym.Env):
 
         _timeout = self.current_step >= self.num_timesteps - 1
         if _timeout:
-            print("Terminated: Reached max time")
+            # print("Truncated: Reached max time")
             # Post-processing only applies when the rocket was actually launched;
             # reaching max_time before launch leaves _rocket_flight as None.
             if self._rocket_flight is not None:
                 self._rocket_flight.post_process_simulation()
                 self._rocket_flight.initialize_prints_plots()
-        elif _rocket_finished:
-            print("Terminated: Rocket flight finished")
-        terminated = _timeout or _rocket_finished
+        # elif _rocket_finished:
+        #     print("Terminated: Rocket flight finished")
+        # The rocket flight ending is a true MDP terminal (no value bootstrap);
+        # hitting max_time is a time-limit truncation (bootstrap V(s_T)). Keep
+        # them mutually exclusive with terminated taking priority.
+        terminated = _rocket_finished
+        truncated = _timeout and not terminated
 
         new_count = np.sum(self._balloon_status[:, 0] == 2)
         reward = new_count - self._popped_count
@@ -280,10 +284,10 @@ class PoolEnv(gym.Env):
         info = self._get_info()
 
         _remainder = np.remainder(self.current_step, 0.1 / self.simulation_parameters["time_step"])
-        if _remainder == 0 or terminated:
+        if _remainder == 0 or terminated or truncated:
             self._render_frame()
 
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
 
     @staticmethod
     def _segment_distance_squared_batch(segment_start_a, segment_end_a, segment_start_b, segment_end_b):
@@ -398,7 +402,8 @@ class PoolEnv(gym.Env):
             plt.pause(0.001)
 
     def close(self):
-        print("closing environment")
+        # print("closing environment")
+        pass
 
     def __create_environment(self):
         self._rocketpy_env = Environment(

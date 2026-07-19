@@ -1,16 +1,27 @@
 import numpy as np
 from pathlib import Path
-from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
-from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
-from BalloonPoppingGymEnv.agents.itron_agent import ITronAgent
+# from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
+from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
+# from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
+from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
+from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
 from BalloonPoppingGymEnv.utils.setup_logging import setup_logging
 from BalloonPoppingGymEnv.utils.scene import Scene
 
 
 def run_for_development():
-    scenario_parameters, given_parameters = load_pool_parameters()
-    env = PoolEnv(render_mode='matplotlib', parameters=scenario_parameters)
-    agent = ITronAgent(given_parameters)
+    # scenario_parameters, given_parameters = load_pool_parameters()
+    # env = PoolEnv(render_mode='matplotlib', parameters=scenario_parameters)
+
+    scenario_parameters, given_parameters = load_scenario_parameters(1)
+
+    # Create environment with scenario parameters turn off rendering to make own plots
+    env = BalloonPoppingEnv(render_mode='matplotlib', parameters=scenario_parameters)
+
+    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-19-1443" / "checkpoints"
+    model_path = checkpoint_dir / "final_model.zip"
+    agent = RLAgent(given_parameters, model_path)
+
     scene = Scene()
 
     # Load the pool
@@ -24,14 +35,14 @@ def run_for_development():
     sampled_indices = np.random.choice(pool_capacity, size=num_balloons, replace=False)
     extracted_tracks = np.array(trajectory_database[sampled_indices])
 
-    env.update_source_trajectories(extracted_tracks)
+    # env.update_source_trajectories(extracted_tracks)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
-    terminated = False
+    terminated = truncated = False
 
-    while not terminated:
+    while not (terminated or truncated):
         action = agent.get_action(observation)
-        observation, reward, terminated, _, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action)
         scene.update(observation, info)
 
         if info['popped_count'] == num_balloons:

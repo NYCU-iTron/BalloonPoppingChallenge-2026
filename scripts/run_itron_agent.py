@@ -1,10 +1,10 @@
-from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
+from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.itron_agent import ITronAgent
 from BalloonPoppingGymEnv.utils.setup_logging import setup_logging
 from BalloonPoppingGymEnv.utils.scene import Scene
 
-scenario_number = 2
+scenario_number = 1
 
 def run_for_development():
 

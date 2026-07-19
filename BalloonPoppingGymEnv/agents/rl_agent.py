@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from pathlib import Path
 
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
@@ -10,9 +11,12 @@ from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
 class RLAgent(BaseAgent):
-    def __init__(self, given_parameters, model_path: str):
+    def __init__(self, given_parameters, model_path: str = None):
         super().__init__(given_parameters)
         self.logger = logging.getLogger(__name__)
+
+        if model_path is None:
+            model_path = Path(__file__).resolve().parent / "final_model.zip"
 
         # Initialize GNC components
         self.estimator = Estimator(given_parameters)
@@ -71,9 +75,9 @@ class RLAgent(BaseAgent):
         tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
 
         self.rocket_state = rocket_state
-        self.rl_action = (
-            np.concatenate((a_cmd, [desired_throttle])) if a_cmd is not None else np.zeros(4, dtype=np.float32)
-        )
+        # The RL action is the residual on top of PN (matches the training
+        # action space), not the combined command.
+        self.rl_action = self.navigator.last_residual.copy()
 
         return {
             "launch": is_launched,
