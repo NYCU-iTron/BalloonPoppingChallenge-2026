@@ -52,7 +52,6 @@ def main():
 
     # ------------------------------- Environments ------------------------------- #
     scenario_parameters, given_parameters = load_pool_parameters()
-
     scripts_dir = Path(__file__).resolve().parent
     pool_path = scripts_dir / "pool_level_1_easy.npy"
 
@@ -64,15 +63,12 @@ def main():
         seed=seed,
         vec_env_cls=SubprocVecEnv
     )
-    # norm_obs must stay False: the deployment path (RLNavigator) feeds the
-    # policy raw observations, so normalizing them here would break
-    # train/deploy symmetry. Reward normalization is training-only and tames
-    # the +1000 pop spikes for stable PPO value updates; Monitor still logs
-    # raw episode rewards, so ep_rew_mean stays interpretable.
+
     train_env = VecNormalize(
         train_env,
         training=True,
-        norm_obs=False,
+        norm_obs=True,
+        clip_obs=10.0,
         norm_reward=True,
         clip_reward=10.0,
         gamma=gamma,
@@ -84,13 +80,12 @@ def main():
         seed=seed + n_train_envs,
         vec_env_cls=SubprocVecEnv
     )
-    # EvalCallback requires the eval env to mirror the train env's wrapper
-    # stack (it syncs normalization stats each eval). Frozen, with raw rewards
-    # so eval metrics stay in real units.
+
     eval_env = VecNormalize(
         eval_env,
         training=False,
-        norm_obs=False,
+        norm_obs=True,
+        clip_obs=10.0,
         norm_reward=False,
         gamma=gamma,
     )
