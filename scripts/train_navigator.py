@@ -39,7 +39,7 @@ def main():
     policy_size = 256
 
     time_step = 0.01
-    horizon_seconds = 40.0
+    horizon_seconds = 30.0
     gamma = 1.0 - (RL_FRAME_SKIP * time_step) / horizon_seconds
 
     entropy_coeff = 0.005
