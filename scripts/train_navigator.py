@@ -11,6 +11,7 @@ from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
 from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
 from BalloonPoppingGymEnv.utils.metrics_callback import MetricsCallback
+from BalloonPoppingGymEnv.utils.save_vecnormalize_callback import SaveVecNormalizeCallback
 from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 def make_custom_env(scenario_params, given_params, pool_path):
@@ -57,6 +58,9 @@ def main():
     runs_dir = scripts_dir / "runs"
     run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    final_path = run_dir / "checkpoints"
+    final_path.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------- Environments ------------------------------- #
     scenario_parameters, given_parameters = load_pool_parameters()
@@ -145,9 +149,10 @@ def main():
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=str(run_dir / "eval_best"),
+        callback_on_new_best=SaveVecNormalizeCallback(str(run_dir / "eval_best" / "vecnormalize.pkl")),
         log_path=str(run_dir / "eval_logs"),
         eval_freq=eval_freq,
-        n_eval_episodes=3,
+        n_eval_episodes=10,
         deterministic=True,
     )
 
@@ -161,12 +166,9 @@ def main():
     except KeyboardInterrupt:
         print("[Training] interrupted by user (Ctrl+C) - saving current model...")
     finally:
-        final_model_path = run_dir / "final_model.zip"
-        model.save(str(final_model_path))
-        # Reward-normalization running stats; needed to resume training with
-        # a consistent reward scale (not needed for deployment: norm_obs=False).
-        train_env.save(str(run_dir / "vecnormalize.pkl"))
-        print(f"[Training] final model saved -> {final_model_path}")
+        model.save(str(final_path / "final_model.zip"))
+        train_env.save(str(final_path / "vecnormalize.pkl"))
+        print(f"[Training] final model saved -> {final_path / 'final_model.zip'}")
 
 
 if __name__ == "__main__":
