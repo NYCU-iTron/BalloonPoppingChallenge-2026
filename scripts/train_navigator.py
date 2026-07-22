@@ -50,10 +50,16 @@ def main():
     save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
     print(f"[Config] eval_freq={eval_freq}, save_freq={save_freq}")
 
-    # ------------------------------- Environments ------------------------------- #
-    scenario_parameters, given_parameters = load_pool_parameters()
+    # -------------------------------- Directories ------------------------------- #
     scripts_dir = Path(__file__).resolve().parent
     pool_path = scripts_dir / "pool_level_1_easy.npy"
+
+    runs_dir = scripts_dir / "runs"
+    run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------- Environments ------------------------------- #
+    scenario_parameters, given_parameters = load_pool_parameters()
 
     seed = 0
 
@@ -89,11 +95,6 @@ def main():
         norm_reward=False,
         gamma=gamma,
     )
-
-    # -------------------------------- Directories ------------------------------- #
-    runs_dir = scripts_dir / "runs"
-    run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------- Tensorboard ------------------------------- #
     try:
