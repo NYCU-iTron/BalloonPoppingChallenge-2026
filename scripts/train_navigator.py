@@ -109,9 +109,10 @@ def main():
     # ----------------------------------- Model ---------------------------------- #
     policy_kwargs = dict(
         activation_fn=torch.nn.Tanh,
+        log_std_init=-1.0,
         net_arch=dict(
             pi=[policy_size, policy_size],
-            vf=[policy_size, policy_size]
+            vf=[policy_size, policy_size, policy_size]
         )
     )
 
@@ -125,7 +126,8 @@ def main():
         batch_size=batch_size,
         n_epochs=10,
         gamma=gamma,
-        gae_lambda=0.95,
+        gae_lambda=0.97,
+        target_kl=0.02,
         ent_coef=entropy_coeff,
         policy_kwargs=policy_kwargs,
         tensorboard_log=str(run_dir / "tensorboard")
