@@ -12,18 +12,16 @@ from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
 from BalloonPoppingGymEnv.utils.metrics_callback import MetricsCallback
 from BalloonPoppingGymEnv.utils.save_vecnormalize_callback import SaveVecNormalizeCallback
-from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
+from BalloonPoppingGymEnv.utils.rl_utils import (
+    RL_FRAME_SKIP,
+    linear_schedule
+)
 
 def make_custom_env(scenario_params, given_params, pool_path):
     def _init():
         raw_env = PoolEnv(render_mode=None, parameters=scenario_params)
         return RLNavigatorEnv(raw_env, given_params, pool_path)
     return _init
-
-def linear_schedule(initial_value, final_value):
-    def schedule(progress_remaining):
-        return final_value + progress_remaining * (initial_value - final_value)
-    return schedule
 
 def main():
     # -------------------------------- Parameters -------------------------------- #
