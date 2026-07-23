@@ -4,29 +4,24 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Selector:
-    # Launch gating for rising targets: hold the rocket on the pad until every
-    # balloon is airborne and the LOWEST one has climbed past this altitude
-    # above ground. The release sequence turns the balloons into a vertical
-    # column (~release_interval * climb_rate spacing) almost directly overhead;
-    # engaging that column from below with a pure climb is the vehicle's
-    # strength (T/W ~1.3 gives almost no lateral authority near the ground, so
-    # launching at a freshly released balloon at pad altitude is unwinnable).
-    LAUNCH_GATE_AGL = 100.0  # (m) hand-tuned engagement altitude
+    # Launch when the FIRST balloon climbs past this altitude: engaging the
+    # fresh end of the stream minimizes wind displacement. (Measured closest
+    # pass: gate 60 -> 4-17 m, gate 100 -> 19-24 m, gate 150 -> worse.)
+    LAUNCH_GATE_AGL = 60.0  # (m)
 
-    # Targeting (see select_target): candidates are scored by the lateral
-    # acceleration their intercept would demand from the current course.
-    MAX_LATERAL_ACCEL = 10.0  # (m/s^2) sustainable lateral authority at T/W ~1.3
-    SWITCH_HYSTERESIS = 1.5   # keep the current target until 1.5x over budget
-    MIN_CHAIN_SPEED = 5.0     # (m/s) below this, course-based scoring is undefined
-    MAX_TIME_TO_GO = 30.0     # (s) slower intercepts than this are irrelevant
+    # On the pad, only balloons at/above this altitude qualify as the opening
+    # target; freshly released ones at pad altitude are unreachable at T/W ~1.3.
+    ENGAGE_FLOOR_AGL = 60.0  # (m)
 
-    # Launch attitude: tip the rail slightly toward the airborne column so the
-    # gravity-turn arc sweeps along the wind-slanted balloon string. The tilt
-    # must stay SMALL: at T/W ~1.25 with fins, a large pad tilt flattens the
-    # trajectory into a lawn-dart under the string (measured sweep on the windy
-    # pool, closest approach to any balloon: 0deg->13m, 5deg->5m, 10deg->38m,
-    # 15deg->113m, 20deg->121m and 3.8 km downrange).
-    MAX_LAUNCH_TILT = 5.0  # (deg) cap on pad tilt from vertical
+    # ZEM targeting parameters (see select_target).
+    MAX_LATERAL_ACCEL = 10.0  # (m/s^2) sustainable lateral authority
+    SWITCH_HYSTERESIS = 1.5   # keep current target until this factor over budget
+    MIN_CHAIN_SPEED = 25.0    # (m/s) below this the course is still forming
+    MAX_TIME_TO_GO = 30.0     # (s) slower intercepts are irrelevant
+
+    # Pad tilt toward the stream must stay small: larger tilts lawn-dart at
+    # T/W ~1.25. (Measured closest pass: 0deg 13 m, 5deg 5 m, 10deg+ diverges.)
+    MAX_LAUNCH_TILT = 5.0  # (deg)
 
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
@@ -44,34 +39,24 @@ class Selector:
 
     def should_launch(self, observation: dict) -> bool:
         raw_balloons = np.asarray(observation["balloon_states"], dtype=float)
-
-        # If no targets
         if raw_balloons.size == 0 or len(raw_balloons) == 0:
             return True
 
         status = np.asarray(observation["balloon_status"], dtype=int).reshape(-1)
-
-        # Wait out the release sequence: a balloon still on the ground would
-        # otherwise keep resetting the "lowest airborne" gate below.
         airborne = status == 1
-        if (status == 0).any() or not airborne.any():
+        if not airborne.any():
             return False
 
-        # Static (or descending) targets cannot be waited out -- engage now.
-        # This keeps the immediate-launch behavior for the static scenarios.
+        # Static/descending targets cannot be waited out -- engage now.
         if float(np.max(raw_balloons[airborne, 5])) <= 0.1:
             return True
 
-        lowest_agl = float(np.min(raw_balloons[airborne, 2])) - self.ground_elevation
-        return lowest_agl >= self.LAUNCH_GATE_AGL
+        highest_agl = float(np.max(raw_balloons[airborne, 2])) - self.ground_elevation
+        return highest_agl >= self.LAUNCH_GATE_AGL
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
-        """
-        Returns [inclination, heading] in degrees, tipping the launch rail
-        toward the airborne balloon column (see MAX_LAUNCH_TILT). Falls back
-        to a vertical launch when nothing is airborne or the column is
-        overhead.
-        """
+        """[inclination, heading] in degrees, tipping the rail toward the
+        opening target (vertical fallback)."""
         vertical = np.array([90.0, 0.0])
 
         states = np.asarray(observation["balloon_states"], dtype=float)
@@ -82,16 +67,25 @@ class Selector:
         if not airborne.any():
             return vertical
 
-        centroid = states[airborne, 0:3].mean(axis=0)
-        east, north = float(centroid[0]), float(centroid[1])
+        # Aim where the opening target selection will aim: nearest airborne
+        # balloon above the floor; centroid until one is that high.
+        agl = states[:, 2] - self.ground_elevation
+        climbing = float(np.max(states[airborne, 5])) > 0.1
+        engageable = airborne & (agl >= self.ENGAGE_FLOOR_AGL)
+        if climbing and engageable.any():
+            horiz_dist = np.hypot(states[:, 0], states[:, 1])
+            horiz_dist[~engageable] = np.inf
+            aim_point = states[int(np.argmin(horiz_dist)), 0:3]
+        else:
+            aim_point = states[airborne, 0:3].mean(axis=0)
+
+        east, north = float(aim_point[0]), float(aim_point[1])
         horizontal = float(np.hypot(east, north))
         if horizontal < 10.0:
-            return vertical  # column essentially overhead
+            return vertical
 
-        # Compass bearing of the column (0 deg = North, 90 deg = East) and the
-        # geometric elevation toward its centroid, capped to a modest pad tilt.
         heading = float(np.degrees(np.arctan2(east, north))) % 360.0
-        altitude_agl = max(float(centroid[2]) - self.ground_elevation, 1.0)
+        altitude_agl = max(float(aim_point[2]) - self.ground_elevation, 1.0)
         tilt = float(np.degrees(np.arctan2(horizontal, altitude_agl)))
         tilt = min(tilt, self.MAX_LAUNCH_TILT)
 
@@ -101,19 +95,14 @@ class Selector:
         """
         Reachability-aware target selection with forward chaining.
 
-        A low-T/W interceptor cannot turn back, so candidates are scored by the
-        lateral acceleration an intercept from the current course would demand
-        (zero-effort-miss guidance demand: a_req = 2*|ZEM| / t_go^2). Among the
-        affordable candidates the soonest intercept wins, which naturally chains
-        target-to-target up the rising balloon column after each pop. The
-        current target is kept (hysteresis) until it costs 1.5x the budget, so
-        the selection does not jitter between similar candidates.
+        Candidates are scored by the lateral acceleration an intercept from the
+        current course would demand (a_req = 2*|ZEM| / t_go^2); the soonest
+        affordable one wins, chaining along the stream after each pop.
 
         Parameters
         ----------
         balloon_states : np.ndarray
-            Shape (N, 6) predicted states [x, y, z, vx, vy, vz]; NaN position
-            marks inactive (unreleased or popped) balloons.
+            Shape (N, 6) predicted states; NaN position marks inactive balloons.
         rocket_state : np.ndarray
             Estimated state [pos(3), vel(3), acc(3), quat(4), gyro(3)].
 
@@ -135,11 +124,21 @@ class Selector:
             dists[~valid] = np.inf
             return int(np.argmin(dists))
 
-        # On the pad / just after liftoff there is no meaningful course yet.
-        # Under the launch gate the nearest balloon is the lowest of the column
-        # overhead -- exactly the right opening target.
-        if float(np.linalg.norm(rocket_vel)) < self.MIN_CHAIN_SPEED:
-            self.current_target_idx = _nearest_valid()
+        # Course not established yet: on the pad pick the nearest balloon above
+        # the floor; once airborne (slow boost) track the plain nearest so the
+        # tracked target is what the rocket actually passes.
+        speed = float(np.linalg.norm(rocket_vel))
+        if speed < self.MIN_CHAIN_SPEED:
+            on_pad = speed < 3.0
+            climbing = float(np.max(balloon_states[valid, 5])) > 0.1
+            agl = balloon_states[:, 2] - self.ground_elevation
+            engageable = valid & (agl >= self.ENGAGE_FLOOR_AGL)
+            if on_pad and climbing and engageable.any():
+                dists = np.linalg.norm(balloon_states[:, 0:3] - rocket_pos, axis=1)
+                dists[~engageable] = np.inf
+                self.current_target_idx = int(np.argmin(dists))
+            else:
+                self.current_target_idx = _nearest_valid()
             return self.current_target_idx
 
         num = len(balloon_states)
@@ -155,18 +154,17 @@ class Selector:
             v_rel = rocket_vel - balloon_states[i, 3:6]
             v_close = float(np.dot(v_rel, rel)) / dist
             if v_close <= 0.5:
-                continue  # receding or barely closing: not reachable ahead
+                continue  # receding or barely closing
             t_go = dist / v_close
             if t_go > self.MAX_TIME_TO_GO:
-                continue  # closing too slowly to matter this flight
-            zem = rel - v_rel * t_go  # miss vector if the course is held
-            # A pass within the balloon radius already pops it, so only the
-            # miss beyond the radius needs to be steered out.
+                continue
+            zem = rel - v_rel * t_go
+            # Only the miss beyond the balloon radius needs steering out.
             miss = max(float(np.linalg.norm(zem)) - self.balloon_radius, 0.0)
             a_req[i] = 2.0 * miss / (t_go * t_go)
             t_go_all[i] = t_go
 
-        # Hysteresis: hold the current target while it stays affordable.
+        # Hold the current target while it stays affordable (hysteresis).
         cur = self.current_target_idx
         cur_alive = cur is not None and cur < num and valid[cur]
         if cur_alive and a_req[cur] <= self.MAX_LATERAL_ACCEL * self.SWITCH_HYSTERESIS:
@@ -174,15 +172,12 @@ class Selector:
 
         feasible = a_req <= self.MAX_LATERAL_ACCEL
         if feasible.any():
-            # Soonest affordable intercept -> chain forward along the course.
             t_sel = np.where(feasible, t_go_all, np.inf)
             self.current_target_idx = int(np.argmin(t_sel))
         elif cur_alive:
-            # Nothing affordable: keep the current one; the training env's miss
-            # detector ends the episode if it keeps receding.
+            # Nothing affordable: keep it; the miss detector ends the episode.
             return cur
         elif np.isfinite(a_req).any():
-            # No current target either: take the least-demanding candidate.
             self.current_target_idx = int(np.argmin(a_req))
         else:
             self.current_target_idx = _nearest_valid()

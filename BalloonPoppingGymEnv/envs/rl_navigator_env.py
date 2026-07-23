@@ -119,6 +119,11 @@ class RLNavigatorEnv(gym.Wrapper):
 
         self._reset_target_tracking(target_idx, target_state)
 
+        # Episode-wide closest tracked distance: unlike _closest_target_distance
+        # it never resets on target switches. Leading training indicator -- pops
+        # only start once this crosses the balloon radius.
+        self._episode_closest_approach = self._prev_target_distance
+
         self.prev_action = np.zeros(4, dtype=np.float32)
         rl_obs = compute_rl_observation(self.rocket_state, target_state)
 
@@ -194,6 +199,7 @@ class RLNavigatorEnv(gym.Wrapper):
             # with the miss penalty below.
             distance = compute_target_distance(self.rocket_state, target_state)
             self._closest_target_distance = min(self._closest_target_distance, distance)
+            self._episode_closest_approach = min(self._episode_closest_approach, distance)
 
             step_delta = action_delta if i == 0 else np.zeros_like(action_delta)
             total_rl_reward += compute_rl_reward(self.observation, info, self.rocket_state, target_state,
@@ -225,6 +231,9 @@ class RLNavigatorEnv(gym.Wrapper):
                 terminated = True
                 info["missed_target"] = True
                 total_rl_reward += failure_penalty(self._closest_target_distance)
+
+        if terminated or truncated:
+            info["closest_approach"] = float(self._episode_closest_approach)
 
         rl_obs = compute_rl_observation(self.rocket_state, target_state)
 
