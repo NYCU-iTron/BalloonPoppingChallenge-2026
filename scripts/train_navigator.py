@@ -27,15 +27,15 @@ def linear_schedule(initial_value, final_value):
 
 def main():
     # -------------------------------- Parameters -------------------------------- #
-    n_train_envs = 26
-    total_timesteps = 4_000_000
+    torch.set_num_threads(1)
+
+    n_train_envs = 20
+    total_timesteps = 8_000_000
 
     n_steps = 1024
     batch_size = 1024
-    assert (n_steps * n_train_envs) % batch_size == 0, \
-        "batch_size must divide n_steps * n_train_envs"
-    print(f"[Config] n_steps={n_steps}, buffer={n_steps * n_train_envs}, "
-          f"~{total_timesteps // (n_steps * n_train_envs)} PPO updates")
+    assert (n_steps * n_train_envs) % batch_size == 0
+    # PPO updates = total_timesteps // (n_steps * n_train_envs)
 
     policy_size = 256
 
@@ -49,7 +49,8 @@ def main():
     n_saves = 10
     eval_freq = max(total_timesteps // (n_train_envs * n_evals), 1)
     save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
-    print(f"[Config] eval_freq={eval_freq}, save_freq={save_freq}")
+
+    n_eval_episodes = 10
 
     # -------------------------------- Directories ------------------------------- #
     scripts_dir = Path(__file__).resolve().parent
@@ -101,14 +102,10 @@ def main():
     )
 
     # -------------------------------- Tensorboard ------------------------------- #
-    try:
-        tb = program.TensorBoard()
-        tb.configure(argv=[None, "--logdir", str(runs_dir)])
-        url = tb.launch()
-        print(f"[TensorBoard] serving {runs_dir} at {url}")
-    except Exception as exc:
-        print(f"[TensorBoard] auto-launch skipped ({exc}). "
-              f"Run manually: tensorboard --logdir {runs_dir}")
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, "--logdir", str(runs_dir)])
+    url = tb.launch()
+    print(f"[TensorBoard] serving {runs_dir} at {url}")
 
     # ----------------------------------- Model ---------------------------------- #
     policy_kwargs = dict(
@@ -152,7 +149,7 @@ def main():
         callback_on_new_best=SaveVecNormalizeCallback(str(run_dir / "eval_best" / "vecnormalize.pkl")),
         log_path=str(run_dir / "eval_logs"),
         eval_freq=eval_freq,
-        n_eval_episodes=10,
+        n_eval_episodes=n_eval_episodes,
         deterministic=True,
     )
 
