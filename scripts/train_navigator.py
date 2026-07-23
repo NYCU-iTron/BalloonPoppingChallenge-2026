@@ -125,7 +125,6 @@ def main():
         learning_rate=linear_schedule(3e-4, 3e-5),
         n_steps=n_steps,
         batch_size=batch_size,
-        n_epochs=10,
         gamma=gamma,
         gae_lambda=0.97,
         target_kl=0.02,
