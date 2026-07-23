@@ -6,6 +6,7 @@ from gymnasium import spaces
 from rocketpy import (
     Environment,
     Flight,
+    Function,
     Rocket,
 )
 from rocketpy.mathutils.vector_matrix import Matrix, Vector
@@ -46,6 +47,12 @@ class PoolEnv(gym.Env):
         self._popped_count = 0
         self._balloon_release_at_step = None
         self._rocketpy_env = None
+
+        # Wind-field rotation state (see set_wind_rotation / __create_environment):
+        # the base wind-vs-altitude table is captured once from the atmosphere
+        # so per-episode rotations are pure array math, no file reload.
+        self._wind_rotation = 0.0
+        self._base_wind_profile = None
 
         # --- DECOUPLED TRACK CONFIGURATION ---
         self.state_dims = 6
@@ -405,7 +412,58 @@ class PoolEnv(gym.Env):
         # print("closing environment")
         pass
 
+    def set_wind_rotation(self, theta):
+        """External API (training wrapper): rotate the atmosphere's wind field
+        about z by ``theta`` radians for the next reset. Must match the
+        rotation applied to the injected balloon tracks, so the wind pushing
+        the rocket stays aligned with the wind that shaped the balloon drift
+        (they share the same sky).
+        """
+        self._wind_rotation = float(theta)
+
+    def __capture_base_wind_profile(self):
+        """Snapshot the atmosphere's wind-vs-altitude table (one-time)."""
+        self._base_wind_profile = None
+        source_x = getattr(self._rocketpy_env.wind_velocity_x, "source", None)
+        source_y = getattr(self._rocketpy_env.wind_velocity_y, "source", None)
+        if isinstance(source_x, np.ndarray) and isinstance(source_y, np.ndarray):
+            heights = source_x[:, 0]
+            wind_u = source_x[:, 1]
+            wind_v = np.interp(heights, source_y[:, 0], source_y[:, 1])
+            self._base_wind_profile = (heights, wind_u, wind_v)
+
+    def __apply_wind_rotation(self):
+        """Rebuild the wind functions from the cached base profile, rotated by
+        the current episode angle. Always reassigns from base so theta=0
+        restores the original field."""
+        if self._base_wind_profile is None:
+            return  # constant/zero wind (standard atmosphere): nothing to rotate
+        heights, wind_u, wind_v = self._base_wind_profile
+        c, s = np.cos(self._wind_rotation), np.sin(self._wind_rotation)
+        rotated_u = c * wind_u - s * wind_v
+        rotated_v = s * wind_u + c * wind_v
+        self._rocketpy_env.wind_velocity_x = Function(
+            np.column_stack([heights, rotated_u]),
+            "Height Above Sea Level (m)", "Wind Velocity X (m/s)",
+            interpolation="linear", extrapolation="constant",
+        )
+        self._rocketpy_env.wind_velocity_y = Function(
+            np.column_stack([heights, rotated_v]),
+            "Height Above Sea Level (m)", "Wind Velocity Y (m/s)",
+            interpolation="linear", extrapolation="constant",
+        )
+
     def __create_environment(self):
+        gust_enabled = self.environment_parameters["gust"]["enable"]
+
+        # The environment is deterministic when gusts are off, so build it once
+        # and reuse it across resets: reloading an Ensemble atmosphere file
+        # every episode would dominate reset time. Only the per-episode wind
+        # rotation changes between resets.
+        if self._rocketpy_env is not None and not gust_enabled:
+            self.__apply_wind_rotation()
+            return
+
         self._rocketpy_env = Environment(
             date=self.environment_parameters["date"], latitude=self.environment_parameters["latitude"],
             longitude=self.environment_parameters["longitude"], elevation=self.environment_parameters["elevation"],
@@ -416,6 +474,11 @@ class PoolEnv(gym.Env):
         else:
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", self.environment_parameters["atmosphere_data_filename"])
             self._rocketpy_env.set_atmospheric_model(type="Ensemble", file=path, dictionary="ECMWF")
+
+        self.__capture_base_wind_profile()
+        # Applied before the gust layer: the gust addition below stays
+        # unrotated (it is isotropic random noise anyway).
+        self.__apply_wind_rotation()
 
         if self.environment_parameters["gust"]["enable"]:
             gust_param = self.environment_parameters["gust"]

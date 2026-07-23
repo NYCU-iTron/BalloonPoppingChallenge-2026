@@ -20,6 +20,14 @@ class Selector:
     MIN_CHAIN_SPEED = 5.0     # (m/s) below this, course-based scoring is undefined
     MAX_TIME_TO_GO = 30.0     # (s) slower intercepts than this are irrelevant
 
+    # Launch attitude: tip the rail slightly toward the airborne column so the
+    # gravity-turn arc sweeps along the wind-slanted balloon string. The tilt
+    # must stay SMALL: at T/W ~1.25 with fins, a large pad tilt flattens the
+    # trajectory into a lawn-dart under the string (measured sweep on the windy
+    # pool, closest approach to any balloon: 0deg->13m, 5deg->5m, 10deg->38m,
+    # 15deg->113m, 20deg->121m and 3.8 km downrange).
+    MAX_LAUNCH_TILT = 5.0  # (deg) cap on pad tilt from vertical
+
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
         self.given_parameters = given_parameters
@@ -59,9 +67,35 @@ class Selector:
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """
-        Returns [inclination, heading] in degrees based on balloon positions.
+        Returns [inclination, heading] in degrees, tipping the launch rail
+        toward the airborne balloon column (see MAX_LAUNCH_TILT). Falls back
+        to a vertical launch when nothing is airborne or the column is
+        overhead.
         """
-        return np.array([90.0, 0.0])
+        vertical = np.array([90.0, 0.0])
+
+        states = np.asarray(observation["balloon_states"], dtype=float)
+        if states.size == 0:
+            return vertical
+        status = np.asarray(observation["balloon_status"], dtype=int).reshape(-1)
+        airborne = status == 1
+        if not airborne.any():
+            return vertical
+
+        centroid = states[airborne, 0:3].mean(axis=0)
+        east, north = float(centroid[0]), float(centroid[1])
+        horizontal = float(np.hypot(east, north))
+        if horizontal < 10.0:
+            return vertical  # column essentially overhead
+
+        # Compass bearing of the column (0 deg = North, 90 deg = East) and the
+        # geometric elevation toward its centroid, capped to a modest pad tilt.
+        heading = float(np.degrees(np.arctan2(east, north))) % 360.0
+        altitude_agl = max(float(centroid[2]) - self.ground_elevation, 1.0)
+        tilt = float(np.degrees(np.arctan2(horizontal, altitude_agl)))
+        tilt = min(tilt, self.MAX_LAUNCH_TILT)
+
+        return np.array([90.0 - tilt, heading])
 
     def select_target(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
         """

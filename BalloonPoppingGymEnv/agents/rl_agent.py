@@ -11,7 +11,7 @@ from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
 class RLAgent(BaseAgent):
-    def __init__(self, given_parameters, model_path: str = None):
+    def __init__(self, given_parameters, model_path: str = None, vecnormalize_path: str = None):
         super().__init__(given_parameters)
         self.logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class RLAgent(BaseAgent):
         # Initialize GNC components
         self.estimator = Estimator(given_parameters)
         self.selector = Selector(given_parameters)
-        self.navigator = RLNavigator(given_parameters, model_path=model_path)
+        self.navigator = RLNavigator(given_parameters, model_path=model_path, vecnormalize_path=vecnormalize_path)
         self.controller = Controller(given_parameters)
 
         self.rocket_state = None

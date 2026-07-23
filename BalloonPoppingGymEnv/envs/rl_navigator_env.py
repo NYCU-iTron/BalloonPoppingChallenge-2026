@@ -23,6 +23,7 @@ class RLNavigatorEnv(gym.Wrapper):
     # geometry during maneuvers; the patience filters momentary recessions.
     MISS_MARGIN = 50.0
     MISS_PATIENCE = 5
+
     def __init__(self, env, given_parameters, pool_path):
         super().__init__(env)
         self.given_parameters = given_parameters
@@ -38,15 +39,15 @@ class RLNavigatorEnv(gym.Wrapper):
         self._num_balloons = self.env.unwrapped.balloon_parameters["num"]
         self._sample_rng = np.random.default_rng()
 
-        # Action (RESIDUAL on the PN guidance law, see rl_utils):
-        #   3D acceleration correction added to the PN command (3)
-        #   Throttle correction added to the PN throttle (1)
+        # Action (RESIDUAL on the PN guidance law, see rl_utils): normalized to
+        # [-1, 1]^4 and scaled to the physical limits inside step(). A uniform
+        # per-dim range keeps PPO's shared log_std meaningful across dims (the
+        # raw limits differ by 30x between accel and throttle, which made the
+        # throttle dim's Gaussian exploration pure clipping).
+        #   [0:3] acceleration correction, scaled by RL_RESIDUAL_ACCEL_LIMIT
+        #   [3]   throttle correction, scaled by RL_RESIDUAL_THROTTLE_LIMIT
         # Zero action = pure proportional navigation.
-        self.action_space = spaces.Box(
-            low=np.array([-RL_RESIDUAL_ACCEL_LIMIT] * 3 + [-RL_RESIDUAL_THROTTLE_LIMIT], dtype=np.float32),
-            high=np.array([RL_RESIDUAL_ACCEL_LIMIT] * 3 + [RL_RESIDUAL_THROTTLE_LIMIT], dtype=np.float32),
-            dtype=np.float32
-        )
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
 
         # Observation:
         #   Relative position (3)
@@ -57,20 +58,33 @@ class RLNavigatorEnv(gym.Wrapper):
             low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32
         )
 
-    def _resample_and_inject(self):
-        """Sample a fresh balloon subset from the pool and hand it to the inner env."""
+    def resample_and_inject(self):
         indices = self._sample_rng.choice(
             self._pool_capacity, size=self._num_balloons, replace=False
         )
 
+        #
         tracks = np.asarray(self._pool[indices])
+
+        # Rotate tracks
+        theta = self._sample_rng.uniform(0.0, 2.0 * np.pi)
+        c, s = np.cos(theta), np.sin(theta)
+        rotation = np.array([[c, -s], [s, c]], dtype=tracks.dtype)
+        tracks[:, 0:2, :] = np.einsum("ij,njt->nit", rotation, tracks[:, 0:2, :])
+        tracks[:, 3:5, :] = np.einsum("ij,njt->nit", rotation, tracks[:, 3:5, :])
+
+        # Rotate the rocket's wind field by the SAME angle: balloons and rocket
+        # share one sky, so the wind that shaped the injected drift must be the
+        # wind the rocket flies in.
+        self.env.unwrapped.set_wind_rotation(theta)
+
         self.env.unwrapped.update_source_trajectories(tracks)
 
     def reset(self, *, seed=None, options=None):
         if seed is not None:
             self._sample_rng = np.random.default_rng(seed)
 
-        self._resample_and_inject()
+        self.resample_and_inject()
         self.observation, info = self.env.reset(seed=seed, options=options)
 
         self.estimator.reset()
@@ -90,7 +104,7 @@ class RLNavigatorEnv(gym.Wrapper):
             self.observation, reward, terminated, truncated, info = self.env.step(idle_action)
 
             if terminated or truncated:
-                self._resample_and_inject()
+                self.resample_and_inject()
                 self.observation, info = self.env.reset(options=options)
                 break
 
@@ -123,11 +137,12 @@ class RLNavigatorEnv(gym.Wrapper):
         self._recede_decisions = 0
 
     def step(self, rl_action):
-        # The policy emits a residual, held for the frame skip; the PN baseline
-        # underneath is recomputed every sim step so the guidance stays reactive
-        # between policy decisions.
-        residual_accel = rl_action[0:3]
-        residual_throttle = float(rl_action[3])
+        # The policy emits a normalized residual, held for the frame skip; the
+        # PN baseline underneath is recomputed every sim step so the guidance
+        # stays reactive between policy decisions.
+        rl_action = np.clip(np.asarray(rl_action, dtype=np.float32), -1.0, 1.0)
+        residual_accel = rl_action[0:3] * RL_RESIDUAL_ACCEL_LIMIT
+        residual_throttle = float(rl_action[3]) * RL_RESIDUAL_THROTTLE_LIMIT
 
         # Smoothness penalty
         action_delta = rl_action - self.prev_action

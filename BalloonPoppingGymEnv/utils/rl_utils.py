@@ -113,7 +113,10 @@ def compute_rl_reward(
     # =========================================================================
     # Action smoothness only; urgency comes from gamma discounting, not a flat
     # time penalty (which reintroduces the cost-of-living / suicide incentive).
-    smoothness_penalty = -0.02 * float(np.linalg.norm(action_delta))
+    # action_delta is in NORMALIZED action units ([-1,1]^4 residuals), so a
+    # full swing has |delta| = 4; the coefficient keeps the max penalty ~-0.6
+    # per decision, well below the shaping scale.
+    smoothness_penalty = -0.15 * float(np.linalg.norm(action_delta))
 
     # =========================================================================
     # 4. Low-altitude attitude guard (true tilt from the quaternion)

@@ -54,7 +54,7 @@ def main():
 
     # -------------------------------- Directories ------------------------------- #
     scripts_dir = Path(__file__).resolve().parent
-    pool_path = scripts_dir / "pool_level_1_easy.npy"
+    pool_path = scripts_dir / "pool_scenario_1.npy"
 
     runs_dir = scripts_dir / "runs"
     run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")

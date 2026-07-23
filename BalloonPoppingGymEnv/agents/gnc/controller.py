@@ -4,9 +4,23 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Controller:
+    # Altitude-scheduled tilt limit on the commanded thrust direction. Near the
+    # ground the thrust must keep enough vertical component to hover (T/W ~1.3
+    # puts the absolute ceiling around 40 deg), otherwise a lateral command
+    # converts directly into altitude loss and ground impact. The allowance
+    # opens up with altitude so the guidance regains full authority once there
+    # is room to recover.
+    TILT_LIMIT_LOW_DEG = 10.0    # (deg) allowed tilt at/below TILT_LOW_ALT
+    TILT_LIMIT_HIGH_DEG = 70.0   # (deg) allowed tilt at/above TILT_HIGH_ALT
+    TILT_LOW_ALT = 50.0          # (m AGL)
+    TILT_HIGH_ALT = 250.0        # (m AGL)
+
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
         self.given_parameters = given_parameters
+
+        env_cfg = given_parameters[Schema.Given.Section.ENVIRONMENT]
+        self.ground_elevation = float(env_cfg[Schema.Given.Environment.ELEVATION])
 
         control_cfg = given_parameters[Schema.Given.Section.ROCKET][Schema.Given.Rocket.CONTROL]
         self.max_gimbal = control_cfg[Schema.Given.Control.GIMBAL_RANGE]
@@ -76,6 +90,29 @@ class Controller:
             desired_dir_world = a_thrust / thrust_norm
         else:
             desired_dir_world = np.array([0.0, 0.0, 1.0])
+
+        # 2b. Altitude-scheduled tilt limiter (survivability guard): clamp the
+        # commanded thrust direction toward vertical when low, keeping the
+        # horizontal bearing. Also blocks downward-pointing commands near the
+        # ground (tilt > 90 deg gets clamped like any other violation).
+        altitude_agl = rocket_state[2] - self.ground_elevation
+        if np.isfinite(altitude_agl):
+            blend = np.clip(
+                (altitude_agl - self.TILT_LOW_ALT) / (self.TILT_HIGH_ALT - self.TILT_LOW_ALT),
+                0.0, 1.0,
+            )
+            tilt_limit = np.radians(
+                self.TILT_LIMIT_LOW_DEG + blend * (self.TILT_LIMIT_HIGH_DEG - self.TILT_LIMIT_LOW_DEG)
+            )
+            horizontal_norm = float(np.hypot(desired_dir_world[0], desired_dir_world[1]))
+            tilt = float(np.arctan2(horizontal_norm, desired_dir_world[2]))
+            if tilt > tilt_limit and horizontal_norm > 1e-9:
+                scale = np.sin(tilt_limit) / horizontal_norm
+                desired_dir_world = np.array([
+                    desired_dir_world[0] * scale,
+                    desired_dir_world[1] * scale,
+                    np.cos(tilt_limit),
+                ])
 
         # 3. World-to-body quaternion rotation of the desired thrust direction.
         qw, qx, qy, qz = rocket_quat

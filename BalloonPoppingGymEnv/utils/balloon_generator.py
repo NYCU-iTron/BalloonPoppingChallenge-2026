@@ -19,7 +19,16 @@ def generate_balloon_chunk(config, num_simulations):
         date=env_cfg["date"], latitude=env_cfg["latitude"], longitude=env_cfg["longitude"],
         elevation=env_cfg["elevation"], datum="WGS84", timezone="UTC"
     )
-    py_env.set_atmospheric_model(type="standard_atmosphere")
+    # Atmosphere selection mirrors the scenario envs (balloon_world / pool_env):
+    # an Ensemble NetCDF file carries the real wind profile that makes the
+    # balloons drift downwind; without it (None) the standard atmosphere has
+    # zero wind and the balloons rise vertically.
+    atmosphere_filename = env_cfg.get("atmosphere_data_filename")
+    if atmosphere_filename is None:
+        py_env.set_atmospheric_model(type="standard_atmosphere")
+    else:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "envs", "data", atmosphere_filename)
+        py_env.set_atmospheric_model(type="Ensemble", file=path, dictionary="ECMWF")
 
     # Set Stochastic Geographical Boundaries
     lat, lon = env_cfg["latitude"], env_cfg["longitude"]
@@ -119,22 +128,23 @@ def generate_balloon_chunk(config, num_simulations):
 
     return raw_flights.astype(np.float32)
 
-def generate_balloon_pool(config, total_tracks=5000, chunk_size=1000, output_path="single_balloons_pool.npy"):
+def generate_balloon_pool(config, total_tracks, output_path="balloons_pool.npy"):
     """
     Main external API generator.
     Accepts arbitrary configuration dicts to compile standalone trajectory matrices onto disk.
     """
-    state_dims = 6  # Fixed kinematic properties: [x, y, z, vx, vy, vz]
+    chunk_size = 1000
+    if total_tracks % chunk_size != 0:
+        raise ValueError("total_tracks must be perfectly divisible by chunk_size to maintain structural alignment.")
 
-    # Dynamically compute total timesteps from current configuration parameters
+    state_dims = 6 # [x, y, z, vx, vy, vz]
+
     max_time = config["simulation"]["max_time"]
     time_step = config["simulation"]["time_step"]
     num_timesteps = int(max_time / time_step)
 
     print(f"\n[INIT] Allocation sequence started for target map: '{output_path}'")
-    print(f"[INFO] Array Layout dimensions: ({total_tracks}, {state_dims}, {num_timesteps})")
 
-    # Safe disk-mapping initialization
     fp = np.lib.format.open_memmap(
         output_path,
         dtype='float32',
@@ -143,8 +153,6 @@ def generate_balloon_pool(config, total_tracks=5000, chunk_size=1000, output_pat
     )
 
     num_chunks = total_tracks // chunk_size
-    if total_tracks % chunk_size != 0:
-        raise ValueError("total_tracks must be perfectly divisible by chunk_size to maintain structural alignment.")
 
     # Execute operational loop using integrated progress visualization
     for chunk_idx in range(num_chunks):
@@ -158,5 +166,5 @@ def generate_balloon_pool(config, total_tracks=5000, chunk_size=1000, output_pat
         fp[start_idx:end_idx] = chunk_data
         fp.flush()
 
-    print(f"[SUCCESS] Compiled tracking pool registry at: '{output_path}'\n")
+    print(f"[SUCCESS] Saved pool at: '{output_path}'\n")
     return fp
