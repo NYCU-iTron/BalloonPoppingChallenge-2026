@@ -118,7 +118,6 @@ def generate_balloon_chunk(config, chunk_size):
     )
     stochastic_flight = StochasticFlight(flight=flight, inclination=5, heading=90)
 
-
     # -------------------------------- Monte Carlo ------------------------------- #
     with tempfile.TemporaryDirectory(prefix="generator_") as temp_dir:
         temp_base_path = str(Path(temp_dir) / "balloon_sim")
@@ -147,7 +146,7 @@ def generate_balloon_chunk(config, chunk_size):
             parallel=False
         )
 
-    # Convert Raw Coordinates to Local ENU Frame Metrics
+    # Convert raw coordinates to local ENU frame
     east0, north0, up0 = pm.geodetic2enu(
         results["lat0"], results["lon0"], py_env.elevation,
         py_env.latitude, py_env.longitude, py_env.elevation
