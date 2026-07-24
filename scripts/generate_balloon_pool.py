@@ -26,6 +26,7 @@ scenario_1_config = {
 if __name__ == "__main__":
     script_dir = Path(__file__).resolve().parent
     output_path = str(script_dir / "pool_scenario_1.npy")
+
     generate_balloon_pool(
         config=scenario_1_config,
         total_tracks=5000,
