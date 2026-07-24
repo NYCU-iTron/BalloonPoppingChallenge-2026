@@ -1,6 +1,7 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+from pathlib import Path
 
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
@@ -32,11 +33,14 @@ class RLNavigatorEnv(gym.Wrapper):
         self.navigator = Navigator(given_parameters)
         self.controller = Controller(given_parameters)
 
-        # Balloon trajectory pool
-        self._pool = np.load(pool_path, mmap_mode="r")
-        self._pool_capacity = self._pool.shape[0]
         self._num_balloons = self.env.unwrapped.balloon_parameters["num"]
         self._sample_rng = np.random.default_rng()
+
+        # Balloon trajectory pool
+        self._pool = None
+        self._pool_capacity = 0
+        self._pool_path = None
+        self.set_pool_path(pool_path)
 
         # Action (RESIDUAL on the PN guidance law, see rl_utils):
         #   3D acceleration correction added to the PN command (3)
@@ -57,6 +61,33 @@ class RLNavigatorEnv(gym.Wrapper):
             low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32
         )
 
+    def set_pool_path(self, pool_path):
+        """Use a new trajectory pool for subsequent episode resets."""
+        path = Path(pool_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Balloon trajectory pool not found: {path}")
+
+        pool = np.load(path, mmap_mode="r")
+        expected_tail = (
+            self.env.unwrapped.state_dims,
+            self.env.unwrapped.num_pool_timesteps,
+        )
+        if pool.ndim != 3 or pool.shape[1:] != expected_tail:
+            raise ValueError(
+                f"Invalid trajectory pool shape for {path}: expected "
+                f"(num_tracks, {expected_tail[0]}, {expected_tail[1]}), got {pool.shape}"
+            )
+        if pool.shape[0] < self._num_balloons:
+            raise ValueError(
+                f"Trajectory pool {path} has {pool.shape[0]} tracks, but the "
+                f"environment needs {self._num_balloons}"
+            )
+
+        self._pool = pool
+        self._pool_capacity = pool.shape[0]
+        self._pool_path = str(path)
+        return self._pool_path
+
     def _resample_and_inject(self):
         """Sample a fresh balloon subset from the pool and hand it to the inner env."""
         indices = self._sample_rng.choice(
@@ -70,6 +101,10 @@ class RLNavigatorEnv(gym.Wrapper):
         if seed is not None:
             self._sample_rng = np.random.default_rng(seed)
 
+        # Keep the pool used by this episode stable in terminal info. A
+        # curriculum switch can happen while other vectorized envs are still
+        # finishing episodes sampled from the previous pool.
+        self._episode_pool_path = self._pool_path
         self._resample_and_inject()
         self.observation, info = self.env.reset(seed=seed, options=options)
 
@@ -97,6 +132,10 @@ class RLNavigatorEnv(gym.Wrapper):
         # Update states
         self.rocket_state = self.estimator.estimate_rocket(self.observation)
         balloon_states = self.estimator.predict_balloons(self.observation)
+        self._episode_balloon_closest_distances = np.full(
+            self._num_balloons, np.inf, dtype=np.float64
+        )
+        self._update_episode_closest_distances(balloon_states)
 
         # Update target
         target_idx = self.selector.select_target(balloon_states, self.rocket_state)
@@ -109,6 +148,22 @@ class RLNavigatorEnv(gym.Wrapper):
         rl_obs = compute_rl_observation(self.rocket_state, target_state)
 
         return rl_obs, info
+
+    def _update_episode_closest_distances(self, balloon_states):
+        """Track each balloon's closest approach during the current episode."""
+        rocket_position = np.asarray(self.rocket_state[0:3], dtype=float)
+        balloon_positions = np.asarray(balloon_states[:, 0:3], dtype=float)
+        if not np.isfinite(rocket_position).all():
+            return
+
+        valid = np.isfinite(balloon_positions).all(axis=1)
+        if not np.any(valid):
+            return
+
+        distances = np.linalg.norm(balloon_positions[valid] - rocket_position, axis=1)
+        self._episode_balloon_closest_distances[valid] = np.minimum(
+            self._episode_balloon_closest_distances[valid], distances
+        )
 
     def _reset_target_tracking(self, target_idx, target_state):
         """Restart distance bookkeeping for a (new) tracked target.
@@ -165,6 +220,7 @@ class RLNavigatorEnv(gym.Wrapper):
             # Update states
             self.rocket_state = self.estimator.estimate_rocket(self.observation)
             balloon_states = self.estimator.predict_balloons(self.observation)
+            self._update_episode_closest_distances(balloon_states)
 
             # Update target
             target_idx = self.selector.select_target(balloon_states, self.rocket_state)
@@ -212,5 +268,10 @@ class RLNavigatorEnv(gym.Wrapper):
                 total_rl_reward += failure_penalty(self._closest_target_distance)
 
         rl_obs = compute_rl_observation(self.rocket_state, target_state)
+
+        info["curriculum_pool_path"] = self._episode_pool_path
+        info["balloon_closest_distances"] = (
+            self._episode_balloon_closest_distances.copy()
+        )
 
         return rl_obs, total_rl_reward, terminated, truncated, info

@@ -10,6 +10,7 @@ from stable_baselines3.common.callbacks import CallbackList, EvalCallback, Check
 from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
 from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
+from BalloonPoppingGymEnv.utils.curriculum_callback import CurriculumCallback
 from BalloonPoppingGymEnv.utils.metrics_callback import MetricsCallback
 from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
@@ -54,12 +55,25 @@ def main():
     scenario_parameters, given_parameters = load_pool_parameters()
 
     scripts_dir = Path(__file__).resolve().parent
-    pool_path = scripts_dir / "pool_level_1_easy.npy"
+    curriculum_stages = [
+        ("easy", scripts_dir / "pool_level_1_easy.npy"),
+        ("medium", scripts_dir / "pool_level_2_medium.npy"),
+        ("hard", scripts_dir / "pool_level_3_hard.npy"),
+    ]
+    missing_pools = [str(path) for _, path in curriculum_stages if not path.is_file()]
+    if missing_pools:
+        missing_list = "\n".join(f"  - {path}" for path in missing_pools)
+        raise FileNotFoundError(
+            "Missing curriculum trajectory pools:\n"
+            f"{missing_list}\n"
+            "Generate them with: python3 scripts/generate_balloon_pool.py --levels 1 2 3"
+        )
+    initial_pool_path = curriculum_stages[0][1]
 
     seed = 0
 
     train_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
+        env_id=make_custom_env(scenario_parameters, given_parameters, initial_pool_path),
         n_envs=n_train_envs,
         seed=seed,
         vec_env_cls=SubprocVecEnv
@@ -79,7 +93,7 @@ def main():
     )
 
     eval_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
+        env_id=make_custom_env(scenario_parameters, given_parameters, initial_pool_path),
         n_envs=1,
         seed=seed + n_train_envs,
         vec_env_cls=SubprocVecEnv
@@ -155,7 +169,24 @@ def main():
 
     metrics_callback = MetricsCallback()
 
-    callback_list = CallbackList([checkpoint_callback, eval_callback, metrics_callback])
+    curriculum_callback = CurriculumCallback(
+        stages=curriculum_stages,
+        num_balloons=scenario_parameters["balloon"]["num"],
+        eval_env=eval_env,
+        window_size=100,
+        mean_popped_ratio_threshold=0.20,
+        proximity_distance=5.0,
+        mean_close_approach_ratio_threshold=0.30,
+        check_every_episodes=25,
+        required_consecutive_passes=2,
+    )
+
+    callback_list = CallbackList([
+        curriculum_callback,
+        checkpoint_callback,
+        eval_callback,
+        metrics_callback,
+    ])
 
     # --------------------------------- Training --------------------------------- #
     try:
