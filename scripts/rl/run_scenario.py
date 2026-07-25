@@ -10,28 +10,25 @@ from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward, compute_targe
 scenario_number = 0
 
 def run_for_development():
+    # Setup env
     scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
     env = BalloonPoppingEnv(render_mode="matplotlib", parameters=scenario_parameters)
 
-    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1852" / "checkpoints"
-    model_path = checkpoint_dir / "rl_model_15000000_steps.zip"
-    agent = RLAgent(given_parameters, model_path)
-
     scene = Scene()
+
+    # Setup agent
+    runs_dir = Path(__file__).resolve().parent.parent / "runs"
+    checkpoint_dir = runs_dir / "2026-07-19-1443" / "checkpoints"
+    model_path = checkpoint_dir / "final_model.zip"
+    vecnormalize_path = checkpoint_dir / "vecnormalize.pkl"
+    agent = RLAgent(given_parameters, model_path, vecnormalize_path)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
 
-    prev_rl_action = np.zeros(4, dtype=np.float32)
-    prev_distance = None
-    rl_reward = 0.0
-
     while not terminated:
         action = agent.get_action(observation)
-        observation, reward, terminated, _, info = env.step(action)
-
-        action_delta = agent.rl_action - prev_rl_action
-        prev_rl_action = agent.rl_action.copy()
+        observation, reward, terminated, truncated, info = env.step(action)
 
         scene.update(observation, info)
 
@@ -39,11 +36,6 @@ def run_for_development():
             print(f"\nAll balloons popped at simulation_time: {observation['simulation_time']:.2f} sec")
             break
 
-        rl_reward += compute_rl_reward(observation, info, agent.rocket_state, agent.target_state,
-                                       reward, terminated, action_delta, prev_distance)
-        prev_distance = compute_target_distance(agent.rocket_state, agent.target_state)
-
-    print(f"Total RL Reward: {rl_reward}")
     scene.draw()
 
 if __name__ == "__main__":
