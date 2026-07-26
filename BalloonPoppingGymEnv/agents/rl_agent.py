@@ -18,10 +18,10 @@ class RLAgent(BaseAgent):
         super().__init__(given_parameters)
 
         if model_path is None:
-            model_path = Path(__file__).resolve().parent / "model.zip"
+            model_path = Path(__file__).resolve().parent / "models"/ "model.zip"
 
         if vecnormalize_path is None:
-            vecnormalize_path = Path(__file__).resolve().parent / "vecnormalize.pkl"
+            vecnormalize_path = Path(__file__).resolve().parent / "models" / "vecnormalize.pkl"
 
         # Init GNC components
         self.estimator = Estimator(given_parameters)
@@ -35,7 +35,6 @@ class RLAgent(BaseAgent):
         self.should_launch = None
         self.launch_inclination_heading = None
         self.desired_acc = None
-        self.desired_throttle = None
 
     def reset(self) -> None:
         self.estimator.reset()
@@ -49,19 +48,18 @@ class RLAgent(BaseAgent):
         self.should_launch = None
         self.launch_inclination_heading = None
         self.desired_acc = None
-        self.desired_throttle = None
 
     def get_action(self, observation: dict) -> dict:
-        # Idle state
+        # Idle
         if not self.should_launch:
             self.should_launch = self.selector.should_launch(observation)
 
-            # Still in idle state
+            # Still idle
             if not self.should_launch:
                 return {
                     "launch": False,
                     "launch_inclination_heading": np.array([90.0, 0.0]),
-                    "tvc": np.zeros(2, dtype=np.float64),
+                    "tvc": np.zeros(2),
                     "roll": 0.0,
                     "throttle": 0.0,
                 }
@@ -73,13 +71,28 @@ class RLAgent(BaseAgent):
 
         if self.skip_counter % RL_FRAME_SKIP == 0:
             balloon_states = self.estimator.predict_balloons(observation)
-            target_idx = self.selector.select_target(balloon_states, rocket_state)
-            target_state = self.estimator.predict_target(observation, target_idx)
-            self.desired_acc, self.desired_throttle = self.navigator.compute(target_state, rocket_state)
+
+            target_idx = self.selector.select_target(
+                balloon_states=balloon_states,
+                rocket_state=rocket_state,
+            )
+
+            target_state = self.estimator.predict_target(
+                observation=observation,
+                target_idx=target_idx,
+            )
+
+            self.desired_acc = self.navigator.compute(
+                target_state=target_state,
+                rocket_state=rocket_state,
+            )
 
         self.skip_counter += 1
 
-        tvc, roll, throttle = self.controller.compute(rocket_state, self.desired_acc, self.desired_throttle)
+        tvc, roll, throttle = self.controller.compute(
+            rocket_state=rocket_state,
+            desired_acc=self.desired_acc,
+        )
 
         return {
             "launch": self.should_launch,
