@@ -78,8 +78,7 @@ def main():
         training=True,
         norm_obs=True,
         clip_obs=10.0,
-        norm_reward=True,
-        clip_reward=10.0,
+        norm_reward=False,
         gamma=gamma,
     )
 
