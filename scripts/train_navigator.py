@@ -7,21 +7,14 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CallbackList, EvalCallback, CheckpointCallback
 
-from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
-from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_pool_parameters
 from BalloonPoppingGymEnv.utils.metrics_callback import MetricsCallback
 from BalloonPoppingGymEnv.utils.save_vecnormalize_callback import SaveVecNormalizeCallback
 from BalloonPoppingGymEnv.utils.rl_utils import (
     RL_FRAME_SKIP,
+    make_custom_env,
     linear_schedule
 )
-
-def make_custom_env(scenario_params, given_params, pool_path):
-    def _init():
-        raw_env = PoolEnv(render_mode=None, parameters=scenario_params)
-        return RLNavigatorEnv(raw_env, given_params, pool_path)
-    return _init
 
 def main():
     # -------------------------------- Parameters -------------------------------- #
