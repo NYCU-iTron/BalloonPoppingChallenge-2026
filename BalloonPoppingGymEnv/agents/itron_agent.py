@@ -4,6 +4,7 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
+from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
 class ITronAgent(BaseAgent):
@@ -15,8 +16,11 @@ class ITronAgent(BaseAgent):
         self.navigator = Navigator(given_parameters)
         self.controller = Controller(given_parameters)
 
+        self.skip_counter = 0
+
         self.should_launch = None
         self.launch_inclination_heading = None
+        self.desired_acc = None
 
     def reset(self) -> None:
         self.estimator.reset()
@@ -24,8 +28,11 @@ class ITronAgent(BaseAgent):
         self.navigator.reset()
         self.controller.reset()
 
+        self.skip_counter = 0
+
         self.should_launch = None
         self.launch_inclination_heading = None
+        self.desired_acc = None
 
     def get_action(self, observation: dict) -> dict:
         # Idle
@@ -45,26 +52,30 @@ class ITronAgent(BaseAgent):
             self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
         rocket_state = self.estimator.estimate_rocket(observation)
-        balloon_states = self.estimator.predict_balloons(observation)
 
-        target_idx = self.selector.select_target(
-            rocket_state=rocket_state,
-            balloon_states=balloon_states,
-        )
+        if self.skip_counter % RL_FRAME_SKIP == 0:
+            balloon_states = self.estimator.predict_balloons(observation)
 
-        target_state = self.estimator.predict_target(
-            observation=observation,
-            target_idx=target_idx,
-        )
+            target_idx = self.selector.select_target(
+                rocket_state=rocket_state,
+                balloon_states=balloon_states,
+            )
 
-        desired_acc = self.navigator.compute(
-            rocket_state=rocket_state,
-            target_state=target_state,
-        )
+            target_state = self.estimator.predict_target(
+                observation=observation,
+                target_idx=target_idx,
+            )
+
+            self.desired_acc = self.navigator.compute(
+                rocket_state=rocket_state,
+                target_state=target_state,
+            )
+
+        self.skip_counter += 1
 
         tvc, roll, throttle = self.controller.compute(
             rocket_state=rocket_state,
-            desired_acc=desired_acc,
+            desired_acc=self.desired_acc,
         )
 
         return {
