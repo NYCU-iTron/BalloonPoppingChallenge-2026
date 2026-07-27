@@ -3,91 +3,98 @@ import numpy as np
 
 
 class Navigator:
-    """Guidance law.
+    """Analytic guidance baseline: proportional navigation + range control.
 
-    Produces a *world-frame lateral acceleration command* via proportional
-    navigation (PN) plus an axial throttle command for energy management. It
-    deliberately does NOT touch attitude, body-frame rotation, or gravity
-    compensation -- those belong to the autopilot/inner loop in Controller.
+    Returns the full desired world-frame acceleration. The controller derives
+    both of its outputs from it -- attitude from the direction of (a_cmd + g),
+    throttle from its magnitude -- so every component of a_cmd is meaningful
+    and the thrust magnitude can never contradict the commanded tilt.
+
+    The command splits along the line of sight:
+      perpendicular  true PN, drives the LOS rate to zero (the intercept law)
+      along the LOS  closing-speed control, which sets how fast the range is
+                     closed and so doubles as altitude management. Without it a
+                     command that merely cancels gravity would hover, and full
+                     thrust would overshoot the balloon column by ~1 km.
     """
+
+    NAV_CONSTANT = 4.0          # classic PN gain, 3-5
+    PN_MIN_CLOSING = 5.0        # (m/s) floor on the PN gain term so steering
+                                # survives a failed pass instead of vanishing
+    APPROACH_GAIN = 0.3         # (1/s) desired closing speed per metre of range
+    MAX_CLOSING_SPEED = 30.0    # (m/s) turn radius is v^2/a; with ~7 m/s2 of
+                                # lateral authority 30 m/s already costs ~130 m
+    SPEED_GAIN = 0.5            # (1/s) P gain on the closing-speed error
+    MAX_LATERAL_ACCEL = 8.0     # (m/s2) bounds PN as omega blows up at short range
+    MAX_BRAKE_ACCEL = 9.81      # (m/s2) engine off: gravity is the only brake
+    MAX_THRUST_ACCEL = 11.8     # (m/s2) T/m at liftoff (worst case); the
+                                # achievable set is a ball of this radius on -g
+    GRAVITY = np.array([0.0, 0.0, -9.81])
 
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
         self.given_parameters = given_parameters
 
-        # --- Tunable guidance parameters ----------------------------------
-        self.nav_constant = 3.0          # PN navigation gain N (typ. 3-5)
-        self.max_lateral_accel = 30.0    # (m/s^2) cap on PN command (~3 g)
-        self.cruise_throttle = 0.9       # baseline climb throttle
-        self.terminal_distance = 20.0    # (m) range to start terminal braking
-
     def reset(self):
         pass
 
-    def compute(self, target_state: np.ndarray | None, rocket_state: np.ndarray) -> tuple[None, None] | tuple[np.ndarray, float]:
-        """
-        Compute the world-frame lateral acceleration command and throttle.
+    def compute(self, rocket_state: np.ndarray, target_state: np.ndarray) -> np.ndarray:
+        if np.isnan(target_state).any():
+            return np.full(3, np.nan)
 
-        Parameters
-        ----------
-        target_state : np.ndarray | None
-            Predicted target state [pos(3), vel(3)] from the estimator, or None.
-        rocket_state : np.ndarray
-            Estimated state [pos(3), vel(3), acc(3), quat(4), gyro(3)].
-
-        Returns
-        -------
-        a_cmd_world : np.ndarray | None
-            Desired lateral acceleration (perpendicular to the line of sight)
-            in the world frame, shape (3,). None when there is no valid target.
-        throttle : float | None
-            Energy-management throttle in [0, 1]. None when no valid target.
-        """
-        if target_state is None or np.isnan(target_state).any():
-            return None, None
+        target_pos = target_state[0:3]
+        target_vel = target_state[3:6]
 
         rocket_pos = rocket_state[0:3]
         rocket_vel = rocket_state[3:6]
 
-        target_state = np.asarray(target_state, dtype=float).reshape(-1)
-        target_pos = target_state[0:3]
-        target_vel = target_state[3:6] if target_state.size >= 6 else np.zeros(3)
-
-        # --- Line of sight -------------------------------------------------
+        # --- Line of sight ------------------------------------------------ #
         los = target_pos - rocket_pos
-        distance = np.linalg.norm(los)
+        distance = float(np.linalg.norm(los))
         if distance < 1e-3:
-            return np.zeros(3), 1.0
+            return np.zeros(3)
         los_hat = los / distance
 
-        # --- Proportional navigation --------------------------------------
-        # Relative velocity and closing speed (positive when approaching).
         v_rel = target_vel - rocket_vel
-        v_closing = -np.dot(v_rel, los_hat)
+        v_closing = -float(np.dot(v_rel, los_hat))      # > 0 while approaching
 
-        # LOS angular rate vector: omega = (r x v_rel) / (r . r)
+        # --- Perpendicular: true proportional navigation ------------------ #
+        # omega = (r x v_rel) / (r . r);  a = N * Vc * (omega x los_hat)
         omega_los = np.cross(los, v_rel) / np.dot(los, los)
+        a_lateral = (self.NAV_CONSTANT
+                     * max(v_closing, self.PN_MIN_CLOSING)
+                     * np.cross(omega_los, los_hat))
+        a_lateral = self._bound(a_lateral, self.MAX_LATERAL_ACCEL)
 
-        # True PN: lateral acceleration command perpendicular to the LOS.
-        # a_cmd = N * Vc * (omega x los_hat)
-        a_cmd = self.nav_constant * max(v_closing, 0.0) * np.cross(omega_los, los_hat)
+        # --- Along the LOS: closing-speed control ------------------------- #
+        # Slow down as the range shrinks so the terminal turn stays flyable,
+        # and push back toward the target whenever the range is opening.
+        # Braking is limited to gravity once the engine is cut, so never ask
+        # for a speed the remaining range cannot bleed off.
+        desired_closing = min(self.APPROACH_GAIN * distance,
+                              self.MAX_CLOSING_SPEED,
+                              float(np.sqrt(2.0 * self.MAX_BRAKE_ACCEL * distance)))
+        a_along = self.SPEED_GAIN * (desired_closing - v_closing) * los_hat
 
-        # Saturate the lateral command so terminal geometry cannot blow it up.
-        a_norm = np.linalg.norm(a_cmd)
-        if a_norm > self.max_lateral_accel:
-            a_cmd = a_cmd * (self.max_lateral_accel / a_norm)
+        return self._realizable(a_lateral + a_along)
 
-        # --- Throttle: energy management ----------------------------------
-        # Hold a high climb throttle; brake near the target if drifting across
-        # the line of sight to tighten the terminal turn.
-        throttle = self.cruise_throttle
-        if distance < self.terminal_distance:
-            v_perp = v_rel - np.dot(v_rel, los_hat) * los_hat
-            cross_range_speed = np.linalg.norm(v_perp)
-            if cross_range_speed > 1.0 and v_closing > 0.0:
-                ease = cross_range_speed / (cross_range_speed + abs(v_closing) + 1e-6)
-                throttle *= np.clip(1.0 - 0.4 * ease, 0.5, 1.0)
+    def _realizable(self, a_cmd: np.ndarray) -> np.ndarray:
+        """Project the request onto what thrust can actually deliver."""
+        a_thrust = a_cmd - self.GRAVITY
 
-        throttle = float(np.clip(throttle, 0.0, 1.0))
+        # Thrust may not point below the horizon: a hard deceleration is flown
+        # by cutting the engine and letting gravity brake, not by flipping the
+        # vehicle over to thrust downwards.
+        a_thrust[2] = max(a_thrust[2], 0.0)
 
-        return a_cmd, throttle
+        # Scaling the sum preserves the commanded direction -- what the attitude
+        # loop tracks -- and gives up only magnitude, exactly as throttle
+        # saturation would.
+        a_thrust = self._bound(a_thrust, self.MAX_THRUST_ACCEL)
+
+        return a_thrust + self.GRAVITY
+
+    @staticmethod
+    def _bound(vec: np.ndarray, limit: float) -> np.ndarray:
+        norm = float(np.linalg.norm(vec))
+        return vec * (limit / norm) if norm > limit else vec

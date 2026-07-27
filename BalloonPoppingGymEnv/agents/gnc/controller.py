@@ -5,15 +5,22 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 class Controller:
     # Altitude-scheduled tilt limit on the commanded thrust direction. Near the
-    # ground the thrust must keep enough vertical component to hover (T/W ~1.3
-    # puts the absolute ceiling around 40 deg), otherwise a lateral command
-    # converts directly into altitude loss and ground impact. The allowance
-    # opens up with altitude so the guidance regains full authority once there
-    # is room to recover.
+    # ground the thrust must keep enough vertical component to hover, otherwise
+    # a lateral command converts directly into altitude loss and ground impact.
+    # The allowance opens up with altitude so guidance regains full authority
+    # once there is room to recover.
     TILT_LIMIT_LOW_DEG = 10.0    # (deg) allowed tilt at/below TILT_LOW_ALT
     TILT_LIMIT_HIGH_DEG = 70.0   # (deg) allowed tilt at/above TILT_HIGH_ALT
     TILT_LOW_ALT = 50.0          # (m AGL)
     TILT_HIGH_ALT = 250.0        # (m AGL)
+
+    # TVC torque is proportional to thrust, so at zero throttle the attitude
+    # loop has no authority at all and the vehicle is left to the fins. A small
+    # floor keeps the gimbal effective (0.05 still yields ~0.5 rad/s^2) while
+    # contributing only ~0.6 m/s^2 of unwanted acceleration.
+    MIN_CONTROL_THROTTLE = 0.05
+
+    GRAVITY = np.array([0.0, 0.0, -9.81])
 
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
@@ -22,142 +29,190 @@ class Controller:
         env_cfg = given_parameters[Schema.Given.Section.ENVIRONMENT]
         self.ground_elevation = float(env_cfg[Schema.Given.Environment.ELEVATION])
 
-        control_cfg = given_parameters[Schema.Given.Section.ROCKET][Schema.Given.Rocket.CONTROL]
+        rocket_cfg = given_parameters[Schema.Given.Section.ROCKET]
+        control_cfg = rocket_cfg[Schema.Given.Rocket.CONTROL]
         self.max_gimbal = control_cfg[Schema.Given.Control.GIMBAL_RANGE]
         self.max_roll = control_cfg[Schema.Given.Control.MAX_ROLL_TORQUE]
         self.throttle_min = control_cfg[Schema.Given.Control.THROTTLE_RANGE][0]
         self.throttle_max = control_cfg[Schema.Given.Control.THROTTLE_RANGE][1]
 
-        # Time step
-        self.sampling_rate = given_parameters[Schema.Given.Section.ROCKET][Schema.Given.Rocket.SENSORS][Schema.Given.Sensors.SAMPLING_RATE]
+        self.sampling_rate = rocket_cfg[Schema.Given.Rocket.SENSORS][Schema.Given.Sensors.SAMPLING_RATE]
         self.dt = 1.0 / self.sampling_rate
+
+        # Mass schedule for converting an acceleration magnitude into throttle.
+        # Propellant drains at a fixed rate regardless of throttle, so mass is a
+        # known function of time alone.
+        self.max_thrust, self.initial_mass, self.propellant_mass, self.burn_time = \
+            self._mass_model(rocket_cfg)
 
         # Attitude (outer) loop gain: maps pointing error to desired body rate.
         self.attitude_gain = 4.5
 
-        # PI integral memory (pitch, yaw); reset between episodes.
-        self.integral_error = np.zeros(2)
+        self.reset()
 
     def reset(self):
-        self.integral_error = np.zeros(2)
+        self.integral_error = np.zeros(2)   # PI memory (pitch, yaw)
+        self.elapsed_time = 0.0             # drives the mass schedule
 
-    def compute(self, rocket_state: np.ndarray, a_cmd_world: np.ndarray | None, desired_throttle: float | None) -> tuple[np.ndarray, float, float]:
+    def compute(self, rocket_state: np.ndarray, desired_acc: np.ndarray) -> tuple[np.ndarray, float, float]:
         """
         Autopilot + inner rate loop.
 
-        Converts a world-frame lateral acceleration command into a thrust
-        direction (with gravity compensation), turns the pointing error into a
-        desired body rate, and closes an anti-windup PI loop on body rates to
-        produce TVC gimbal commands.
+        Takes a single world-frame acceleration command and derives both
+        outputs from it: the thrust direction (after gravity compensation) sets
+        the attitude, and its magnitude sets the throttle. Deriving both from
+        one vector means the commanded tilt and the thrust magnitude can never
+        contradict each other, which they could when throttle arrived
+        separately.
 
         Parameters
         ----------
         rocket_state : np.ndarray
             Estimated state [pos(3), vel(3), acc(3), quat(4), gyro(3)].
-        a_cmd_world : np.ndarray | None
-            Desired world-frame lateral acceleration from the navigator, or None.
-        desired_throttle : float | None
-            Energy-management throttle from the navigator, or None.
+        desired_acc : np.ndarray | None
+            Desired world-frame acceleration from the navigator, or None.
 
         Returns
         -------
         (tvc [x, y], roll, throttle) clipped within actuator limits.
         """
-        # 1. Safe guard: handle missing or invalid guidance commands gracefully.
-        if a_cmd_world is None or np.isnan(a_cmd_world).any():
-            self.integral_error = np.zeros(2)  # Clear tracking memory
+        self.elapsed_time += self.dt
+
+        # 1. Missing or invalid guidance: hold attitude neutral and idle.
+        if desired_acc is None or not np.all(np.isfinite(np.asarray(desired_acc, dtype=float))):
+            self.integral_error = np.zeros(2)
             return np.zeros(2), 0.0, self.throttle_min
 
         rocket_state = np.asarray(rocket_state, dtype=float).reshape(-1)
-        rocket_quat = rocket_state[9:13]
+        rocket_quat = self._unit_quat(rocket_state[9:13])
         actual_rates = rocket_state[13:16]
+        if not np.all(np.isfinite(actual_rates)):
+            actual_rates = np.zeros(3)      # gyro is NaN until liftoff
 
-        # Sensor safety guard before launch (gyro is NaN until liftoff).
-        if np.isnan(actual_rates).any():
-            actual_rates = np.zeros(3)
+        # 2. Thrust must supply the command and cancel gravity.
+        a_thrust = np.asarray(desired_acc, dtype=float).reshape(-1)[0:3] - self.GRAVITY
+        thrust_accel = float(np.linalg.norm(a_thrust))
+        desired_dir_world = (a_thrust / thrust_accel if thrust_accel > 1e-9
+                             else np.array([0.0, 0.0, 1.0]))
 
-        quat_norm = np.linalg.norm(rocket_quat)
-        if quat_norm > 1e-9:
-            rocket_quat = rocket_quat / quat_norm
+        # 2b. Altitude-scheduled tilt limiter (survivability guard): rotate the
+        # commanded direction toward vertical when low, keeping its bearing.
+        desired_dir_world = self._limit_tilt(desired_dir_world, rocket_state[2])
 
-        # 2. Autopilot: acceleration command -> thrust direction.
-        # Thrust must produce the lateral command AND cancel gravity, so the
-        # required thrust acceleration is a_cmd minus the gravity vector.
-        a_cmd_world = np.asarray(a_cmd_world, dtype=float).reshape(-1)[0:3]
-        a_thrust = a_cmd_world - np.array([0.0, 0.0, -9.81])
-        thrust_norm = np.linalg.norm(a_thrust)
-        if thrust_norm > 1e-9:
-            desired_dir_world = a_thrust / thrust_norm
-        else:
-            desired_dir_world = np.array([0.0, 0.0, 1.0])
+        # 3. Throttle from the commanded magnitude: thrust = m * |a_thrust|.
+        throttle = self._throttle_for(thrust_accel)
 
-        # 2b. Altitude-scheduled tilt limiter (survivability guard): clamp the
-        # commanded thrust direction toward vertical when low, keeping the
-        # horizontal bearing. Also blocks downward-pointing commands near the
-        # ground (tilt > 90 deg gets clamped like any other violation).
-        altitude_agl = rocket_state[2] - self.ground_elevation
-        if np.isfinite(altitude_agl):
-            blend = np.clip(
-                (altitude_agl - self.TILT_LOW_ALT) / (self.TILT_HIGH_ALT - self.TILT_LOW_ALT),
-                0.0, 1.0,
-            )
-            tilt_limit = np.radians(
-                self.TILT_LIMIT_LOW_DEG + blend * (self.TILT_LIMIT_HIGH_DEG - self.TILT_LIMIT_LOW_DEG)
-            )
-            horizontal_norm = float(np.hypot(desired_dir_world[0], desired_dir_world[1]))
-            tilt = float(np.arctan2(horizontal_norm, desired_dir_world[2]))
-            if tilt > tilt_limit and horizontal_norm > 1e-9:
-                scale = np.sin(tilt_limit) / horizontal_norm
-                desired_dir_world = np.array([
-                    desired_dir_world[0] * scale,
-                    desired_dir_world[1] * scale,
-                    np.cos(tilt_limit),
-                ])
-
-        # 3. World-to-body quaternion rotation of the desired thrust direction.
+        # 4. World-to-body rotation of the desired thrust direction.
         qw, qx, qy, qz = rocket_quat
         q_vec = np.array([qx, qy, qz])
         t = 2.0 * np.cross(-q_vec, desired_dir_world)
         desired_dir_body = desired_dir_world + qw * t + np.cross(-q_vec, t)
 
-        # 4. Attitude error -> desired body rates (outer P loop).
+        # 5. Attitude error -> desired body rates (outer P loop).
         # Body z is the thrust axis; rotate it onto desired_dir_body.
         d = desired_dir_body
         rot_axis = np.array([-d[1], d[0], 0.0])
-        sin_mag = np.linalg.norm(rot_axis)
-        angle = np.arctan2(sin_mag, d[2])
+        sin_mag = float(np.linalg.norm(rot_axis))
+        angle = float(np.arctan2(sin_mag, d[2]))
         if sin_mag > 1e-9:
             rot_axis = rot_axis / sin_mag
 
-        desired_rates = np.zeros(3)
-        desired_rates[0] = self.attitude_gain * angle * rot_axis[0]  # pitch (wx)
-        desired_rates[1] = self.attitude_gain * angle * rot_axis[1]  # yaw   (wy)
-        desired_rates[2] = 0.0                                       # roll
-
-        # 5. Throttle boundary (pass-through energy command).
-        throttle = float(np.clip(desired_throttle, self.throttle_min, self.throttle_max))
+        desired_rates = np.array([
+            self.attitude_gain * angle * rot_axis[0],   # pitch (wx)
+            self.attitude_gain * angle * rot_axis[1],   # yaw   (wy)
+            0.0,                                        # roll
+        ])
 
         # 6. Inner rate loop: anti-windup PI on body rates.
         error = desired_rates - actual_rates
 
-        kp_gimbal = 2.0
-        ki_gimbal = 0.5
-        kp_roll = 1.0
+        kp_gimbal, ki_gimbal, kp_roll = 2.0, 0.5, 1.0
 
-        # TVC authority compensation: scale gain inversely with throttle so the
-        # angular acceleration stays uniform as thrust changes.
+        # TVC authority scales with thrust, so raise the gain as throttle drops
+        # to keep the angular response roughly uniform.
         dynamic_kp = kp_gimbal / max(throttle, 0.15)
 
-        self.integral_error += error[0:2] * self.dt
-        self.integral_error = np.clip(self.integral_error, -0.05, 0.05)
+        # Integrate only on finite error: a single NaN would otherwise latch the
+        # integral permanently (np.clip does not filter NaN) and disable the
+        # attitude loop for the rest of the episode.
+        if np.all(np.isfinite(error[0:2])):
+            self.integral_error = np.clip(self.integral_error + error[0:2] * self.dt,
+                                          -0.05, 0.05)
 
-        raw_pitch_gimbal = (dynamic_kp * error[0]) + (ki_gimbal * self.integral_error[0])
-        raw_yaw_gimbal = (dynamic_kp * error[1]) + (ki_gimbal * self.integral_error[1])
-        raw_roll_torque = kp_roll * error[2]
+        raw_tvc = dynamic_kp * error[0:2] + ki_gimbal * self.integral_error
+        raw_roll = kp_roll * error[2]
 
-        # 7. Actuator saturation clamping.
-        raw_tvc = np.array([raw_pitch_gimbal, raw_yaw_gimbal])
-        tvc = np.clip(raw_tvc, -self.max_gimbal, self.max_gimbal)
-        roll = np.clip(raw_roll_torque, -self.max_roll, self.max_roll)
+        # 7. Actuator saturation.
+        tvc = np.clip(np.nan_to_num(raw_tvc), -self.max_gimbal, self.max_gimbal)
+        roll = float(np.clip(np.nan_to_num(raw_roll), -self.max_roll, self.max_roll))
 
         return tvc, roll, throttle
+
+    # ------------------------------------------------------------------ #
+
+    def _throttle_for(self, thrust_accel: float) -> float:
+        """Throttle that delivers the requested thrust acceleration."""
+        mass = self.initial_mass - self.propellant_mass * min(
+            self.elapsed_time / self.burn_time, 1.0)
+        throttle = mass * thrust_accel / self.max_thrust
+        floor = max(self.throttle_min, self.MIN_CONTROL_THROTTLE)
+        return float(np.clip(throttle, floor, self.throttle_max))
+
+    def _limit_tilt(self, direction: np.ndarray, altitude_msl: float) -> np.ndarray:
+        altitude_agl = altitude_msl - self.ground_elevation
+        if not np.isfinite(altitude_agl):
+            return direction
+
+        blend = np.clip((altitude_agl - self.TILT_LOW_ALT)
+                        / (self.TILT_HIGH_ALT - self.TILT_LOW_ALT), 0.0, 1.0)
+        tilt_limit = np.radians(self.TILT_LIMIT_LOW_DEG
+                                + blend * (self.TILT_LIMIT_HIGH_DEG - self.TILT_LIMIT_LOW_DEG))
+
+        horizontal = np.hypot(direction[0], direction[1])
+        tilt = np.arctan2(horizontal, direction[2])
+        if tilt <= tilt_limit:
+            return direction
+
+        # A straight-down command has no horizontal bearing to preserve, so pick
+        # an arbitrary one rather than leaving it unclamped.
+        bearing = (direction[0:2] / horizontal if horizontal > 1e-9
+                   else np.array([1.0, 0.0]))
+        return np.array([bearing[0] * np.sin(tilt_limit),
+                         bearing[1] * np.sin(tilt_limit),
+                         np.cos(tilt_limit)])
+
+    @staticmethod
+    def _unit_quat(quat: np.ndarray) -> np.ndarray:
+        norm = np.linalg.norm(quat)
+        if not np.isfinite(norm) or norm < 1e-9:
+            return np.array([1.0, 0.0, 0.0, 0.0])
+        return quat / norm
+
+    @staticmethod
+    def _mass_model(rocket_cfg) -> tuple[float, float, float, float]:
+        motor = rocket_cfg[Schema.Given.Rocket.MOTOR]
+        tank = rocket_cfg[Schema.Given.Rocket.TANK]
+        body = rocket_cfg[Schema.Given.Rocket.ROCKET_BODY]
+
+        max_thrust = float(motor[Schema.Given.Motor.THRUST_SOURCE])
+        burn_time = float(motor[Schema.Given.Motor.BURN_TIME])
+
+        grain_mass = (float(motor[Schema.Given.Motor.GRAIN_DENSITY])
+                      * float(motor[Schema.Given.Motor.GRAIN_NUMBER])
+                      * np.pi
+                      * (float(motor[Schema.Given.Motor.GRAIN_OUTER_RADIUS]) ** 2
+                         - float(motor[Schema.Given.Motor.GRAIN_INITIAL_INNER_RADIUS]) ** 2)
+                      * float(motor[Schema.Given.Motor.GRAIN_INITIAL_HEIGHT]))
+
+        liquid = float(tank[Schema.Given.Tank.INITIAL_LIQUID_MASS])
+        gas = float(tank[Schema.Given.Tank.INITIAL_GAS_MASS])
+        flow_rate = float(tank[Schema.Given.Tank.LIQUID_MASS_FLOW_RATE_OUT])
+
+        initial_mass = (float(body[Schema.Given.RocketBody.MASS])
+                        + float(motor[Schema.Given.Motor.DRY_MASS])
+                        + grain_mass + liquid + gas)
+        # Oxidiser drains at a fixed rate independent of throttle; the grain is
+        # consumed over the same burn.
+        propellant_mass = min(flow_rate * burn_time, liquid) + grain_mass
+
+        return max_thrust, initial_mass, propellant_mass, burn_time
