@@ -83,7 +83,7 @@ class Selector:
 
         return np.array([90.0 - tilt, heading])
 
-    def select_target(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
+    def select_target(self, rocket_state: np.ndarray, balloon_states: np.ndarray) -> int | None:
         """
         Reachability-aware target selection with forward chaining.
 
