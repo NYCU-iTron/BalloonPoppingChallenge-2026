@@ -16,12 +16,11 @@ from BalloonPoppingGymEnv.utils.rl_utils import (
 class RLNavigatorEnv(gym.Wrapper):
     def __init__(self, env: gym.Env, given_parameters, pool_path_list: list[Path]):
         super().__init__(env)
-        self.given_parameters = given_parameters
 
         self.estimator = Estimator(given_parameters)
         self.selector = Selector(given_parameters)
         self.controller = Controller(given_parameters)
-        self.reward_calculator = RewardCalculator()
+        self.reward_calculator = RewardCalculator(given_parameters)
 
         self.action_space = spaces.Box(
             low=-1,
@@ -37,6 +36,7 @@ class RLNavigatorEnv(gym.Wrapper):
             dtype=np.float32
         )
 
+        self.rocket_state = None
         self.launch_inclination_heading = None
 
         # Balloon trajectory pool
@@ -112,7 +112,7 @@ class RLNavigatorEnv(gym.Wrapper):
 
     def step(self, rl_action):
         rl_reward = 0.0
-        popped = 0.0
+        pop_count = 0.0
         desired_acc = scale_rl_action(rl_action)
 
         for _ in range(RL_FRAME_SKIP):
@@ -130,7 +130,7 @@ class RLNavigatorEnv(gym.Wrapper):
             }
 
             observation, reward, terminated, truncated, info = self.env.step(action)
-            popped += reward
+            pop_count += reward
             self.rocket_state = self.estimator.estimate_rocket(observation)
 
             if terminated or truncated:
@@ -155,7 +155,7 @@ class RLNavigatorEnv(gym.Wrapper):
 
         rl_reward, rl_reward_dict = self.reward_calculator.compute(
             observation=observation,
-            popped=popped,
+            pop_count=pop_count,
             rocket_state=self.rocket_state,
             target_idx=target_idx,
             target_state=target_state,
