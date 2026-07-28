@@ -29,10 +29,14 @@ class RLNavigatorEnv(gym.Wrapper):
             dtype=np.float32
         )
 
+        # rel_pos (3)
+        # rel_vel (3)
+        # rocket_vel (3)
+        # altitude (2)
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(10,), # [rel_pos(3), rel_vel(3), rocket_vel(3), altitude(1)]
+            shape=(11,),
             dtype=np.float32
         )
 
