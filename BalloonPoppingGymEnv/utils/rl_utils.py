@@ -7,12 +7,14 @@ def make_custom_env(scenario_params, given_params, pool_path):
     def _init():
         from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
         from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
+
         raw_env = PoolEnv(render_mode=None, parameters=scenario_params)
+
         return RLNavigatorEnv(raw_env, given_params, pool_path)
     return _init
 
 def scale_rl_action(normalized_action: np.ndarray) -> np.ndarray:
-    action = np.asarray(normalized_action, dtype=np.float64).reshape(-1) * MAX_ACC
+    action = np.asarray(normalized_action, dtype=np.float32).reshape(-1) * MAX_ACC
     return action
 
 def compute_rl_observation(rocket_state, target_state):
