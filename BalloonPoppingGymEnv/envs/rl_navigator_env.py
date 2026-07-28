@@ -6,6 +6,7 @@ import numpy as np
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
+from BalloonPoppingGymEnv.utils.schema import Schema
 from BalloonPoppingGymEnv.utils.reward_calculator import RewardCalculator
 from BalloonPoppingGymEnv.utils.rl_utils import (
     compute_rl_observation,
@@ -95,17 +96,17 @@ class RLNavigatorEnv(gym.Wrapper):
         self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
         self.rocket_state = self.estimator.estimate_rocket(observation)
-        balloon_states = self.estimator.predict_balloons(observation)
 
+        # Select target
+        pred_balloon_states = self.estimator.predict_balloons(observation)
         target_idx = self.selector.select_target(
-            balloon_states=balloon_states,
+            balloon_states=pred_balloon_states,
             rocket_state=self.rocket_state,
         )
 
-        target_state = self.estimator.predict_target(
-            observation=observation,
-            target_idx=target_idx,
-        )
+        # Get target state
+        raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+        target_state = raw_balloon_states[target_idx]
 
         rl_obs = compute_rl_observation(
             rocket_state=self.rocket_state,
@@ -140,17 +141,16 @@ class RLNavigatorEnv(gym.Wrapper):
             if terminated or truncated:
                 break
 
-        balloon_states = self.estimator.predict_balloons(observation)
-
+        # Select target
+        pred_balloon_states = self.estimator.predict_balloons(observation)
         target_idx = self.selector.select_target(
-            balloon_states=balloon_states,
+            balloon_states=pred_balloon_states,
             rocket_state=self.rocket_state,
         )
 
-        target_state = self.estimator.predict_target(
-            observation=observation,
-            target_idx=target_idx,
-        )
+        # Get target state
+        raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+        target_state = raw_balloon_states[target_idx]
 
         rl_obs = compute_rl_observation(
             rocket_state=self.rocket_state,

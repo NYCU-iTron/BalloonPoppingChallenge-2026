@@ -6,6 +6,7 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.rl_navigator import RLNavigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
+from BalloonPoppingGymEnv.utils.schema import Schema
 from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
@@ -64,23 +65,22 @@ class RLAgent(BaseAgent):
                     "throttle": 0.0,
                 }
 
-            # Run get_launch_heading only once after should_launch turn true
+            # Run only once after should_launch become true
             self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
         rocket_state = self.estimator.estimate_rocket(observation)
 
         if self.skip_counter % RL_FRAME_SKIP == 0:
-            balloon_states = self.estimator.predict_balloons(observation)
-
+            # Select target
+            pred_balloon_states = self.estimator.predict_balloons(observation)
             target_idx = self.selector.select_target(
-                balloon_states=balloon_states,
+                balloon_states=pred_balloon_states,
                 rocket_state=rocket_state,
             )
 
-            target_state = self.estimator.predict_target(
-                observation=observation,
-                target_idx=target_idx,
-            )
+            # Get target states
+            raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+            target_state = raw_balloon_states[target_idx]
 
             self.desired_acc = self.navigator.compute(
                 target_state=target_state,
