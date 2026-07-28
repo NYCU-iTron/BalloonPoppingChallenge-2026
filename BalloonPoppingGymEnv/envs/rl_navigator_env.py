@@ -23,6 +23,7 @@ class RLNavigatorEnv(gym.Wrapper):
         self.controller = Controller(given_parameters)
         self.reward_calculator = RewardCalculator(given_parameters)
 
+        # ax, ay, az
         self.action_space = spaces.Box(
             low=-1,
             high=1,
