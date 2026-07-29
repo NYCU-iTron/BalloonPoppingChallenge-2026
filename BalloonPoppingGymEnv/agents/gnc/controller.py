@@ -4,18 +4,47 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Controller:
+    """Turns one world-frame acceleration command into TVC, roll and throttle.
+
+    Direction sets the attitude, magnitude sets the throttle, so the two can
+    never contradict each other. Measured envelope: ~7 m/s^2 of lateral
+    acceleration above the tilt limiter, 0.4-0.9 s to reach a step, under
+    2 m/s^2 of steady tracking error.
+    """
+
+    # Speed comes from the rate loop; raising ATTITUDE_GAIN instead buys little
+    # rise time for a lot of overshoot.
     ATTITUDE_GAIN = 2.0        # (1/s) attitude error -> body rate
     MAX_BODY_RATE = 1.2        # (rad/s)
-    RATE_KP = 6.0              # (1/s) rate loop bandwidth after plant inversion
-    RATE_KI = 6.0              # (1/s^2)
-    INTEGRAL_LIMIT = 1.5       # (rad) enough for the integral to reach full gimbal
+    RATE_KP = 8.0              # (1/s) rate loop bandwidth after plant inversion
+    RATE_KI = 8.0              # (1/s^2)
+    INTEGRAL_LIMIT = 1.5       # (rad) enough to drive the gimbal to full travel
     ROLL_KP = 2.0              # (1/s)
-    MIN_THROTTLE = 0.05        # keeps some TVC torque available while braking
+    MIN_THROTTLE = 0.05        # TVC torque scales with thrust; keep some in hand
 
-    TILT_LIMIT_LOW_DEG = 10.0
+    # Net upward acceleration is only ~3 m/s^2, so arresting a sink is
+    # expensive: 20 m/s costs ~80 m, 30 m/s costs ~170 m. What has to be
+    # limited is therefore a sink rate the remaining altitude can still absorb.
+    # An altitude-only rule is both too strict while climbing and too
+    # permissive while already dropping.
+    GROUND_BUFFER = 20.0       # (m AGL) held in reserve
+    SINK_TAU = 1.0             # (s) how briskly vz is pulled back
+
+    # Backstop: a large tilt near the ground is slow to undo whatever the sink
+    # rate says. Scheduled gently, since the envelope above carries the load.
+    TILT_LIMIT_LOW_DEG = 20.0
     TILT_LIMIT_HIGH_DEG = 70.0
-    TILT_LOW_ALT = 50.0
-    TILT_HIGH_ALT = 250.0
+    TILT_LOW_ALT = 30.0
+    TILT_HIGH_ALT = 150.0
+
+    # Thrust and gravity alone do not deliver the command: a sustained lateral
+    # command swings the velocity vector round faster than the body, so the
+    # angle of attack reverses and the fins push back with several m/s^2. The
+    # trim measures that rather than modelling it, which also covers mass,
+    # thrust and wind error. It must settle slower than the attitude loop.
+    ACC_TRIM_TAU = 2.0         # (s)
+    ACC_TRIM_LIMIT = 8.0       # (m/s^2) measured peak demand is ~5
+    ACC_FILTER_TAU = 0.15      # (s) smoothing on the differentiated velocity
 
     GRAVITY = np.array([0.0, 0.0, -9.81])
 
@@ -69,7 +98,7 @@ class Controller:
         self.roll_inertia = float(body_cfg[Schema.Given.RocketBody.INERTIA][2])
 
         # Mass, pitch inertia and nozzle moment arm at ignition and at burnout;
-        # everything in between is interpolated on burn fraction.
+        # everything between is interpolated on burn fraction.
         schedule = []
         for grain_m, liquid_m in ((grain_mass, liquid), (0.0, liquid_end)):
             tank_m = liquid_m + gas
@@ -96,11 +125,17 @@ class Controller:
         self.quat = np.array([1.0, 0.0, 0.0, 0.0])
         self.body_rates = np.zeros(3)
         self.altitude_agl = 0.0
+        self.vertical_velocity = 0.0
+        self.velocity = np.zeros(3)
+        self.achieved_acc = np.zeros(3)
+        self.acc_trim = np.zeros(3)
+        self.prev_velocity = None
         self.prev_tvc = np.zeros(2)
         self.prev_throttle = self.throttle_min
 
     def update(self, rocket_state: np.ndarray, simulation_time: float) -> None:
-        # First call is the ignition step: both agent paths idle before launch.
+        """Refresh the vehicle model and state cache. Once per environment step."""
+        # Both agent paths idle before launch, so the first call is ignition.
         if self.ignition_time is None:
             self.ignition_time = simulation_time
         burn_elapsed = max(simulation_time - self.ignition_time, 0.0)
@@ -118,32 +153,55 @@ class Controller:
                      else np.array([1.0, 0.0, 0.0, 0.0]))
         self.body_rates = state[13:16] if np.all(np.isfinite(state[13:16])) else np.zeros(3)
         self.altitude_agl = state[2] - self.ground_elevation
+        self.vertical_velocity = state[5] if np.isfinite(state[5]) else 0.0
+        self.velocity = state[3:6] if np.all(np.isfinite(state[3:6])) else np.zeros(3)
+
+        # Differentiating velocity rather than reading the accelerometer: the
+        # sensor's gravity convention is not guaranteed, and getting it wrong
+        # biases the trim by a full g. Smoothed, since differentiation is noisy.
+        if self.prev_velocity is not None:
+            raw = (self.velocity - self.prev_velocity) / self.dt
+            blend = min(self.dt / self.ACC_FILTER_TAU, 1.0)
+            self.achieved_acc = self.achieved_acc + (raw - self.achieved_acc) * blend
+        self.prev_velocity = self.velocity.copy()
 
     def compute(self, desired_acc: np.ndarray) -> tuple[np.ndarray, float, float]:
+        """Command -> (tvc [deg], roll torque, throttle), within actuator limits."""
         if desired_acc is None or not np.all(np.isfinite(np.asarray(desired_acc, dtype=float))):
             self.integral = np.zeros(2)
             self.prev_tvc = np.zeros(2)
             self.prev_throttle = self.throttle_min
             return np.zeros(2), 0.0, self.throttle_min
 
-        # Thrust supplies the command and cancels gravity; clamp to what the
-        # engine can actually deliver, keeping the direction.
-        a_thrust = np.asarray(desired_acc, dtype=float).reshape(-1)[0:3] - self.GRAVITY
+        command = np.asarray(desired_acc, dtype=float).reshape(-1)[0:3].copy()
+
+        # Floor the vertical command at the sink this altitude can still arrest.
+        # Inactive while climbing or dropping slowly, so it costs no agility.
+        if np.isfinite(self.altitude_agl):
+            recover_accel = max(self.max_thrust_accel + self.GRAVITY[2], 0.1)
+            allowed_sink = np.sqrt(2.0 * recover_accel
+                                   * max(self.altitude_agl - self.GROUND_BUFFER, 0.0))
+            command[2] = max(command[2],
+                             (-allowed_sink - self.vertical_velocity) / self.SINK_TAU)
+
+        # Thrust supplies the command, cancels gravity and carries the trim.
+        a_thrust = command - self.GRAVITY + self.acc_trim
         thrust_accel = float(np.linalg.norm(a_thrust))
-        if thrust_accel > self.max_thrust_accel:
+        thrust_limited = thrust_accel > self.max_thrust_accel
+        if thrust_limited:
             a_thrust *= self.max_thrust_accel / thrust_accel
             thrust_accel = self.max_thrust_accel
         direction = a_thrust / thrust_accel if thrust_accel > 1e-9 else np.array([0.0, 0.0, 1.0])
 
-        # Altitude-scheduled tilt limit: near the ground the thrust must keep
-        # enough vertical component to hold altitude.
         blend = (np.clip((self.altitude_agl - self.TILT_LOW_ALT)
                          / (self.TILT_HIGH_ALT - self.TILT_LOW_ALT), 0.0, 1.0)
                  if np.isfinite(self.altitude_agl) else 1.0)
         tilt_limit = np.radians(self.TILT_LIMIT_LOW_DEG
                                 + blend * (self.TILT_LIMIT_HIGH_DEG - self.TILT_LIMIT_LOW_DEG))
         horizontal = float(np.hypot(direction[0], direction[1]))
-        if np.arctan2(horizontal, direction[2]) > tilt_limit:
+        tilt_limited = np.arctan2(horizontal, direction[2]) > tilt_limit
+        if tilt_limited:
+            # A straight-down command has no bearing to keep, so pick one.
             bearing = direction[0:2] / horizontal if horizontal > 1e-9 else np.array([1.0, 0.0])
             direction = np.array([bearing[0] * np.sin(tilt_limit),
                                   bearing[1] * np.sin(tilt_limit),
@@ -176,8 +234,8 @@ class Controller:
         rate_error = rate_cmd - self.body_rates[0:2]
         torque = self.inertia * (self.RATE_KP * rate_error + self.RATE_KI * self.integral)
 
-        # Allocation: torque -> gimbal angle, which divides out thrust and arm
-        # so the loop gains stay valid across throttle and burn state.
+        # Torque -> gimbal angle. Dividing out thrust and arm keeps the loop
+        # gains valid across throttle and burn state, so no gain scheduling.
         thrust = self.max_thrust * throttle
         ratio = (torque / (thrust * self.moment_arm) if thrust > 1e-6
                  else np.full(2, np.inf))
@@ -187,11 +245,20 @@ class Controller:
         tvc = self.prev_tvc + np.clip(tvc - self.prev_tvc, -gimbal_step, gimbal_step)
         self.prev_tvc = tvc
 
+        # Integrate only while the command is actually being followed: a limited
+        # or saturated command leaves an error on purpose, and chasing it would
+        # wind the loop up against a guard that is doing its job.
         saturated = (np.any(np.abs(ratio) >= 1.0)
                      or np.any(np.abs(tvc) >= self.max_gimbal - 1e-9))
         if not saturated and not self.burnout and np.all(np.isfinite(rate_error)):
             self.integral = np.clip(self.integral + rate_error * self.dt,
                                     -self.INTEGRAL_LIMIT, self.INTEGRAL_LIMIT)
+
+        if not (thrust_limited or tilt_limited or self.burnout
+                or self.prev_velocity is None):
+            error = command - self.achieved_acc
+            self.acc_trim = np.clip(self.acc_trim + error * self.dt / self.ACC_TRIM_TAU,
+                                    -self.ACC_TRIM_LIMIT, self.ACC_TRIM_LIMIT)
 
         roll = float(np.clip(-self.ROLL_KP * self.roll_inertia * self.body_rates[2],
                              -self.max_roll, self.max_roll))
