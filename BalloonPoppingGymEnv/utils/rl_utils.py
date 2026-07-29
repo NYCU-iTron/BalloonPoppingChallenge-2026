@@ -1,16 +1,17 @@
 import numpy as np
+from pathlib import Path
 
 RL_FRAME_SKIP = 5
 MAX_ACC = 20.0
 
-def make_custom_env(scenario_params, given_params, pool_path):
+def make_custom_env(scenario_params, given_params, pool_path_list: list[Path]):
     def _init():
         from BalloonPoppingGymEnv.envs.rl_navigator_env import RLNavigatorEnv
         from BalloonPoppingGymEnv.envs.pool_env import PoolEnv
 
         raw_env = PoolEnv(render_mode=None, parameters=scenario_params)
 
-        return RLNavigatorEnv(raw_env, given_params, pool_path)
+        return RLNavigatorEnv(raw_env, given_params, pool_path_list)
     return _init
 
 def scale_rl_action(normalized_action: np.ndarray) -> np.ndarray:
