@@ -44,10 +44,6 @@ class RewardCalculator:
         else:
             self.closest_dist = min(self.closest_dist, curr_dist)
 
-        # Failure
-        if terminated and info["popped_count"] == 0:
-            failure = -100 - min(self.closest_dist, 300)
-
         # Progress shaping
         if self.best_dist is None:
             self.best_dist = curr_dist
@@ -56,6 +52,11 @@ class RewardCalculator:
                         - np.log(max(curr_dist, self.balloon_radius)))
             progress_reward = progress * 20.0
             self.best_dist = curr_dist
+
+        # Failure
+        if terminated:
+            failure = -100 - min(self.closest_dist, 300)
+            failure = failure * (0.7**info["popped_count"])
 
         # Pop
         if pop_count > 0:
