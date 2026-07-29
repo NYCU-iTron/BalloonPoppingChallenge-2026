@@ -46,6 +46,9 @@ def main():
     # -------------------------------- Directories ------------------------------- #
     scripts_dir = Path(__file__).resolve().parent
     pool_path = scripts_dir / "pool_scenario_1.npy"
+    pool_path_list = [
+        pool_path
+    ]
 
     runs_dir = scripts_dir / "runs"
     run_dir = runs_dir / datetime.now().strftime("%Y-%m-%d-%H%M")
@@ -60,7 +63,7 @@ def main():
     seed = 0
 
     train_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
+        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path_list),
         n_envs=n_train_envs,
         seed=seed,
         vec_env_cls=SubprocVecEnv
@@ -76,7 +79,7 @@ def main():
     )
 
     eval_env = make_vec_env(
-        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path),
+        env_id=make_custom_env(scenario_parameters, given_parameters, pool_path_list),
         n_envs=1,
         seed=seed + n_train_envs,
         vec_env_cls=SubprocVecEnv
