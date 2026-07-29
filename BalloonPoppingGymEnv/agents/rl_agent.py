@@ -68,7 +68,12 @@ class RLAgent(BaseAgent):
             # Run only once after should_launch become true
             self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
+        # Update states
         rocket_state = self.estimator.estimate_rocket(observation)
+        self.controller.update(
+            rocket_state=rocket_state,
+            simulation_time=observation[Schema.Observation.SIMULATION_TIME]
+        )
 
         if self.skip_counter % RL_FRAME_SKIP == 0:
             # Select target
@@ -90,7 +95,6 @@ class RLAgent(BaseAgent):
         self.skip_counter += 1
 
         tvc, roll, throttle = self.controller.compute(
-            rocket_state=rocket_state,
             desired_acc=self.desired_acc,
         )
 

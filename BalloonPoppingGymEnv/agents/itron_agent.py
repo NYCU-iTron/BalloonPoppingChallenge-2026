@@ -4,6 +4,7 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
+from BalloonPoppingGymEnv.utils.schema import Schema
 from BalloonPoppingGymEnv.utils.rl_utils import RL_FRAME_SKIP
 
 
@@ -51,11 +52,16 @@ class ITronAgent(BaseAgent):
 
             self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
+        # Update states
         rocket_state = self.estimator.estimate_rocket(observation)
+        self.controller.update(
+            rocket_state=rocket_state,
+            simulation_time=observation[Schema.Observation.SIMULATION_TIME],
+        )
 
         if self.skip_counter % RL_FRAME_SKIP == 0:
+            # Select target
             balloon_states = self.estimator.predict_balloons(observation)
-
             target_idx = self.selector.select_target(
                 rocket_state=rocket_state,
                 balloon_states=balloon_states,
@@ -74,7 +80,6 @@ class ITronAgent(BaseAgent):
         self.skip_counter += 1
 
         tvc, roll, throttle = self.controller.compute(
-            rocket_state=rocket_state,
             desired_acc=self.desired_acc,
         )
 

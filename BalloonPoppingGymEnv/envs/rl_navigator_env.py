@@ -96,7 +96,12 @@ class RLNavigatorEnv(gym.Wrapper):
 
         self.launch_inclination_heading = self.selector.get_launch_heading(observation)
 
+        # Update states
         self.rocket_state = self.estimator.estimate_rocket(observation)
+        self.controller.update(
+            rocket_state=self.rocket_state,
+            simulation_time=observation[Schema.Observation.SIMULATION_TIME]
+        )
 
         # Select target
         pred_balloon_states = self.estimator.predict_balloons(observation)
@@ -123,7 +128,6 @@ class RLNavigatorEnv(gym.Wrapper):
 
         for _ in range(RL_FRAME_SKIP):
             tvc, roll, throttle = self.controller.compute(
-                rocket_state=self.rocket_state,
                 desired_acc=desired_acc,
             )
 
@@ -136,11 +140,17 @@ class RLNavigatorEnv(gym.Wrapper):
             }
 
             observation, reward, terminated, truncated, info = self.env.step(action)
-            pop_count += reward
-            self.rocket_state = self.estimator.estimate_rocket(observation)
-
             if terminated or truncated:
                 break
+
+            pop_count += reward
+
+            # Update states
+            self.rocket_state = self.estimator.estimate_rocket(observation)
+            self.controller.update(
+                rocket_state=self.rocket_state,
+                simulation_time=observation[Schema.Observation.SIMULATION_TIME],
+            )
 
         # Select target
         pred_balloon_states = self.estimator.predict_balloons(observation)
