@@ -112,7 +112,10 @@ class RLNavigatorEnv(gym.Wrapper):
 
         # Get target state
         raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
-        target_state = raw_balloon_states[target_idx]
+        target_state = self.selector.get_target_state(
+            balloon_states=raw_balloon_states,
+            target_idx=target_idx,
+        )
 
         rl_obs = compute_rl_observation(
             rocket_state=self.rocket_state,
@@ -161,7 +164,10 @@ class RLNavigatorEnv(gym.Wrapper):
 
         # Get target state
         raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
-        target_state = raw_balloon_states[target_idx]
+        target_state = self.selector.get_target_state(
+            balloon_states=raw_balloon_states,
+            target_idx=target_idx,
+        )
 
         rl_obs = compute_rl_observation(
             rocket_state=self.rocket_state,
