@@ -111,7 +111,7 @@ class RLNavigatorEnv(gym.Wrapper):
         )
 
         # Get target state
-        raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+        raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
         target_state = raw_balloon_states[target_idx]
 
         rl_obs = compute_rl_observation(
@@ -160,7 +160,7 @@ class RLNavigatorEnv(gym.Wrapper):
         )
 
         # Get target state
-        raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+        raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
         target_state = raw_balloon_states[target_idx]
 
         rl_obs = compute_rl_observation(

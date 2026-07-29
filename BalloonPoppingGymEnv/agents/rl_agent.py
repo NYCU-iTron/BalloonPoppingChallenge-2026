@@ -84,7 +84,7 @@ class RLAgent(BaseAgent):
             )
 
             # Get target states
-            raw_balloon_states = observation[Schema.Observation.BALLOON_STATUS]
+            raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
             target_state = raw_balloon_states[target_idx]
 
             self.desired_acc = self.navigator.compute(
