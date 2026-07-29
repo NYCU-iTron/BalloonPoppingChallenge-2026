@@ -3,10 +3,10 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
+from BalloonPoppingGymEnv.utils.schema import Schema
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-from BalloonPoppingGymEnv.utils.schema import Schema
 from BalloonPoppingGymEnv.utils.reward_calculator import RewardCalculator
 from BalloonPoppingGymEnv.utils.rl_utils import (
     compute_rl_observation,
@@ -18,10 +18,21 @@ class RLNavigatorEnv(gym.Wrapper):
     def __init__(self, env: gym.Env, given_parameters, pool_path_list: list[Path]):
         super().__init__(env)
 
+        self.rocket_state = None
+        self.launch_inclination_heading = None
+
         self.estimator = Estimator(given_parameters)
         self.selector = Selector(given_parameters)
         self.controller = Controller(given_parameters)
         self.reward_calculator = RewardCalculator(given_parameters)
+
+        # Balloon trajectory pool
+        self.pools = [
+            np.load(pool_path, mmap_mode="r") for pool_path in pool_path_list
+        ]
+        self.pool_idx = 0
+        self.num_balloons = self.env.unwrapped.balloon_parameters["num"]
+        self.sample_rng = np.random.default_rng()
 
         # ax, ay, az
         self.action_space = spaces.Box(
@@ -42,20 +53,7 @@ class RLNavigatorEnv(gym.Wrapper):
             dtype=np.float32
         )
 
-        self.rocket_state = None
-        self.launch_inclination_heading = None
-
-        # Balloon trajectory pool
-        self.pools = [
-            np.load(pool_path, mmap_mode="r") for pool_path in pool_path_list
-        ]
-        self.pool_idx = 0
-        self.num_balloons = self.env.unwrapped.balloon_parameters["num"]
-        self.sample_rng = np.random.default_rng()
-
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-
         # Sample tracks from pool
         indices = self.sample_rng.choice(
             self.pools[self.pool_idx].shape[0], size=self.num_balloons, replace=False
@@ -77,8 +75,9 @@ class RLNavigatorEnv(gym.Wrapper):
         self.rocket_state = None
         self.launch_inclination_heading = None
 
-        self.env.update_source_trajectories(tracks)
-        observation, info = self.env.reset()
+        self.env.unwrapped.set_wind_rotation(theta)
+        self.env.unwrapped.update_source_trajectories(tracks)
+        observation, info = self.env.reset(seed=seed, options=options)
 
         # Fast forward to the launch time
         while not self.selector.should_launch(observation):
@@ -98,9 +97,10 @@ class RLNavigatorEnv(gym.Wrapper):
 
         # Update states
         self.rocket_state = self.estimator.estimate_rocket(observation)
+        simulation_time = observation[Schema.Observation.SIMULATION_TIME]
         self.controller.update(
             rocket_state=self.rocket_state,
-            simulation_time=observation[Schema.Observation.SIMULATION_TIME]
+            simulation_time=simulation_time,
         )
 
         # Select target
@@ -143,17 +143,18 @@ class RLNavigatorEnv(gym.Wrapper):
             }
 
             observation, reward, terminated, truncated, info = self.env.step(action)
-            if terminated or truncated:
-                break
-
             pop_count += reward
 
             # Update states
             self.rocket_state = self.estimator.estimate_rocket(observation)
+            simulation_time = observation[Schema.Observation.SIMULATION_TIME]
             self.controller.update(
                 rocket_state=self.rocket_state,
-                simulation_time=observation[Schema.Observation.SIMULATION_TIME],
+                simulation_time=simulation_time,
             )
+
+            if terminated or truncated:
+                break
 
         # Select target
         pred_balloon_states = self.estimator.predict_balloons(observation)
