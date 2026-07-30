@@ -5,7 +5,6 @@ from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
 from BalloonPoppingGymEnv.utils.scene import Scene
-from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward, compute_target_distance
 
 scenario_number = 0
 
