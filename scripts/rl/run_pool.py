@@ -12,7 +12,7 @@ def run_for_development():
     env = PoolEnv(render_mode='matplotlib', parameters=scenario_parameters)
 
     # Load pool
-    script_dir = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parent.parent
     pool_file = script_dir / "pool_level_1_easy.npy"
     trajectory_database = np.load(pool_file, mmap_mode='r')
     pool_capacity = trajectory_database.shape[0]
@@ -27,9 +27,9 @@ def run_for_development():
 
     # Setup agent
     runs_dir = Path(__file__).resolve().parent.parent / "runs"
-    checkpoint_dir = runs_dir / "2026-07-19-1443" / "checkpoints"
-    model_path = checkpoint_dir / "final_model.zip"
-    vecnormalize_path = checkpoint_dir / "vecnormalize.pkl"
+    checkpoint_dir = runs_dir / "2026-07-30-0057" / "checkpoints"
+    model_path = checkpoint_dir / "rl_model_5600000_steps.zip"
+    vecnormalize_path = checkpoint_dir / "rl_model_vecnormalize_5600000_steps.pkl"
     agent = RLAgent(given_parameters, model_path, vecnormalize_path)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
