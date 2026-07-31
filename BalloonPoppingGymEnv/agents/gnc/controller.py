@@ -30,6 +30,15 @@ class Controller:
     GROUND_BUFFER = 20.0       # (m AGL) held in reserve
     SINK_TAU = 1.0             # (s) how briskly vz is pulled back
 
+    # No altitude buffer to fall back on right off the pad: guarantee net
+    # climb there instead of just bounding how hard the command may sink.
+    # Short window on purpose -- just past the rail, not the whole GROUND_BUFFER.
+    MIN_CLIMB_ACCEL = 2.0     # (m/s^2) guaranteed net climb near the ground
+    MIN_CLIMB_ALT = 5.0       # (m AGL) above which guidance regains full authority
+
+    # Below this vertical speed, lateral authority is throttled back to avoid AoA stall
+    MIN_LATERAL_SPEED = 15.0  # (m/s) for full lateral authority
+
     # Backstop: a large tilt near the ground is slow to undo whatever the sink
     # rate says. Scheduled gently, since the envelope above carries the load.
     TILT_LIMIT_LOW_DEG = 20.0
@@ -183,6 +192,13 @@ class Controller:
                                    * max(self.altitude_agl - self.GROUND_BUFFER, 0.0))
             command[2] = max(command[2],
                              (-allowed_sink - self.vertical_velocity) / self.SINK_TAU)
+
+            climb_floor = self.MIN_CLIMB_ACCEL * np.clip(
+                1.0 - self.altitude_agl / self.MIN_CLIMB_ALT, 0.0, 1.0)
+            command[2] = max(command[2], climb_floor)
+
+        lateral_gate = np.clip(self.vertical_velocity / self.MIN_LATERAL_SPEED, 0.0, 1.0)
+        command[0:2] *= lateral_gate
 
         # Thrust supplies the command, cancels gravity and carries the trim.
         a_thrust = command - self.GRAVITY + self.acc_trim
