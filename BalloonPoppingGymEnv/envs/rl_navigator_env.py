@@ -153,6 +153,12 @@ class RLNavigatorEnv(gym.Wrapper):
                 simulation_time=simulation_time,
             )
 
+            # Check truncated
+            if self.controller.burnout and not (terminated or truncated):
+                burn_elapsed = simulation_time - self.controller.ignition_time
+                if burn_elapsed >= self.controller.burn_time + 5.0:
+                    truncated = True
+
             if terminated or truncated:
                 break
 
