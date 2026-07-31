@@ -1,20 +1,17 @@
-import numpy as np
 from pathlib import Path
-
 from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 from BalloonPoppingGymEnv.evaluation.evaluate import load_scenario_parameters
 from BalloonPoppingGymEnv.agents.rl_agent import RLAgent
 from BalloonPoppingGymEnv.utils.scene import Scene
-from BalloonPoppingGymEnv.utils.rl_utils import compute_rl_reward, compute_target_distance
 
-scenario_number = 0
+scenario_number = 1
 
 def run_for_development():
     scenario_parameters, given_parameters = load_scenario_parameters(scenario_number)
     env = BalloonPoppingEnv(render_mode="matplotlib", parameters=scenario_parameters)
 
-    checkpoint_dir = Path(__file__).resolve().parent / "runs" / "2026-07-12-1852" / "checkpoints"
-    model_path = checkpoint_dir / "rl_model_15000000_steps.zip"
+    checkpoint_dir = Path(__file__).resolve().parent / "downloaded_runs" / "runs" / "2026-07-19-1443" / "checkpoints"
+    model_path = checkpoint_dir / "final_model.zip"
     agent = RLAgent(given_parameters, model_path)
 
     scene = Scene()
@@ -22,16 +19,9 @@ def run_for_development():
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
     terminated = False
 
-    prev_rl_action = np.zeros(4, dtype=np.float32)
-    prev_distance = None
-    rl_reward = 0.0
-
     while not terminated:
         action = agent.get_action(observation)
         observation, reward, terminated, _, info = env.step(action)
-
-        action_delta = agent.rl_action - prev_rl_action
-        prev_rl_action = agent.rl_action.copy()
 
         scene.update(observation, info)
 
@@ -39,11 +29,6 @@ def run_for_development():
             print(f"\nAll balloons popped at simulation_time: {observation['simulation_time']:.2f} sec")
             break
 
-        rl_reward += compute_rl_reward(observation, info, agent.rocket_state, agent.target_state,
-                                       reward, terminated, action_delta, prev_distance)
-        prev_distance = compute_target_distance(agent.rocket_state, agent.target_state)
-
-    print(f"Total RL Reward: {rl_reward}")
     scene.draw()
 
 if __name__ == "__main__":
