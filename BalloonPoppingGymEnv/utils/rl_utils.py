@@ -2,7 +2,6 @@ import numpy as np
 from pathlib import Path
 
 RL_FRAME_SKIP = 5
-MAX_ACC = 20.0
 
 def make_custom_env(scenario_params, given_params, pool_path_list: list[Path]):
     def _init():
@@ -15,8 +14,21 @@ def make_custom_env(scenario_params, given_params, pool_path_list: list[Path]):
     return _init
 
 def scale_rl_action(normalized_action: np.ndarray) -> np.ndarray:
-    action = np.asarray(normalized_action, dtype=np.float32).reshape(-1) * MAX_ACC
-    return action
+    action = np.asarray(normalized_action, dtype=np.float32).reshape(-1)
+
+    acc_limit_xy = 8.0
+    acc_limit_z_low = -10.0
+    acc_limit_z_high = 5.0
+
+    a_cmd = np.zeros(3, dtype=np.float32)
+    a_cmd[0] = action[0] * acc_limit_xy
+    a_cmd[1] = action[1] * acc_limit_xy
+
+    # Linear interpolation for Z axis: [-1, 1] -> [acc_limit_z_low, acc_limit_z_high]
+    z_norm = (action[2] + 1.0) * 0.5
+    a_cmd[2] = acc_limit_z_low + z_norm * (acc_limit_z_high - acc_limit_z_low)
+
+    return a_cmd
 
 def compute_rl_observation(rocket_state, target_state):
     rel_pos = target_state[0:3] - rocket_state[0:3]
