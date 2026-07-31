@@ -13,6 +13,7 @@ class RewardCalculator:
         dense_budget = 0.2 * self.min_pop_reward
         self.base_approach_weight = 0.8 * dense_budget
         self.base_zem_weight = 0.2 * dense_budget
+        self.worst_phi_dist = 2.0
         self.worst_phi_zem = 2.0
 
         # Safeguard lower bounds
@@ -120,7 +121,7 @@ class RewardCalculator:
             self.curr_ref_zem_dist = max(zem_dist, self.min_ref_zem_dist)
 
         # Distance potential (normalized to -1.0 -> 0.0)
-        phi_dist = -dist / self.curr_ref_dist
+        phi_dist = -min(dist / self.curr_ref_dist, self.worst_phi_dist)
 
         # ZEM potential
         phi_zem = -min(zem_dist / self.curr_ref_zem_dist, self.worst_phi_zem)
