@@ -31,12 +31,12 @@ def main():
     policy_size = 256
 
     time_step = 0.01
-    horizon_seconds = 30.0
+    horizon_seconds = 35.0
     gamma = 1.0 - (RL_FRAME_SKIP * time_step) / horizon_seconds
 
-    entropy_coeff = 0.005
+    entropy_coeff = 0.01
 
-    n_evals = 30
+    n_evals = 50
     n_saves = 10
     eval_freq = max(total_timesteps // (n_train_envs * n_evals), 1)
     save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
