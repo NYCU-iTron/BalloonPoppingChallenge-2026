@@ -24,9 +24,8 @@ def scale_rl_action(normalized_action: np.ndarray) -> np.ndarray:
     a_cmd[0] = action[0] * acc_limit_xy
     a_cmd[1] = action[1] * acc_limit_xy
 
-    # Linear interpolation for Z axis: [-1, 1] -> [acc_limit_z_low, acc_limit_z_high]
-    z_norm = (action[2] + 1.0) * 0.5
-    a_cmd[2] = acc_limit_z_low + z_norm * (acc_limit_z_high - acc_limit_z_low)
+    # Piecewise so action=0 -> a_cmd_z=0 (hover), not the range midpoint
+    a_cmd[2] = action[2] * (acc_limit_z_high if action[2] >= 0 else -acc_limit_z_low)
 
     return a_cmd
 
