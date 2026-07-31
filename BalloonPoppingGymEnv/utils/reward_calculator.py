@@ -10,9 +10,9 @@ class RewardCalculator:
         self.max_pop_reward = 800.0
 
         # Dense
-        dense_budget = 0.25 * self.min_pop_reward
-        self.base_approach_weight = 0.5 * dense_budget
-        self.base_zem_weight = 0.5 * dense_budget
+        dense_budget = 0.2 * self.min_pop_reward
+        self.base_approach_weight = 0.8 * dense_budget
+        self.base_zem_weight = 0.2 * dense_budget
         self.worst_phi_zem = 2.0
 
         # Safeguard lower bounds
@@ -71,12 +71,13 @@ class RewardCalculator:
             ) * progress
             pop_reward = pop_count * unit_pop_reward
 
-        # -------------------------------- Guard Clauses ----------------------------- #
+        # ----------------------------------- Dense ---------------------------------- #
         is_invalid_target = (
             target_idx is None
             or target_state is None
             or np.isnan(target_state).any()
         )
+
         if is_invalid_target:
             self.prev_valid = False
             reward = terminated_penalty + pop_reward
@@ -88,27 +89,10 @@ class RewardCalculator:
             }
 
         rel_pos = target_state[0:3] - rocket_state[0:3]
-        dist = float(np.linalg.norm(rel_pos))
-
-        if dist <= 1e-6:
-            self.prev_valid = False
-            reward = terminated_penalty + pop_reward
-            return reward, {
-                "terminated": terminated_penalty,
-                "pop": pop_reward,
-                "approach": 0.0,
-                "zem": 0.0,
-            }
-
-        # ----------------------------------- Dense ---------------------------------- #
         rel_vel = rocket_state[3:6] - target_state[3:6]
-        unit_los = rel_pos / dist
-        closing_vel = float(np.dot(rel_vel, unit_los))
 
-        zem_dist = None
-        if closing_vel > 0.5:
-            t_go = dist / closing_vel
-            zem_dist = float(np.linalg.norm(rel_pos - rel_vel * t_go))
+        dist = float(np.linalg.norm(rel_pos))
+        unit_los = rel_pos / max(dist, 1e-9)
 
         # Continuity check against previous step
         is_continuous = (
@@ -118,25 +102,28 @@ class RewardCalculator:
             and self.prev_phi_zem is not None
         )
 
+        # zem dist
+        rel_speed_sq = float(np.dot(rel_vel, rel_vel))
+        if rel_speed_sq > 1e-6:
+            closing_vel = float(np.dot(rel_vel, unit_los))
+            t_go = max(dist * closing_vel, 0.0) / rel_speed_sq
+            zem_dist = float(np.linalg.norm(rel_pos - rel_vel * t_go))
+        else:
+            zem_dist = dist
+
         # Mark current state as valid for next step
         self.prev_valid = True
 
         # Lock per-engagement reference on lock-on
         if not is_continuous:
             self.curr_ref_dist = max(dist, self.min_ref_dist)
-            self.curr_ref_zem_dist = (
-                max(zem_dist, self.min_ref_zem_dist) if zem_dist is not None
-                else max(0.3 * self.curr_ref_dist, self.min_ref_zem_dist)
-            )
+            self.curr_ref_zem_dist = max(zem_dist, self.min_ref_zem_dist)
 
         # Distance potential (normalized to -1.0 -> 0.0)
         phi_dist = -dist / self.curr_ref_dist
 
         # ZEM potential
-        phi_zem = (
-            -min(zem_dist / self.curr_ref_zem_dist, self.worst_phi_zem)
-            if zem_dist is not None else -self.worst_phi_zem
-        )
+        phi_zem = -min(zem_dist / self.curr_ref_zem_dist, self.worst_phi_zem)
 
         approach_reward = 0.0
         zem_reward = 0.0
