@@ -13,7 +13,7 @@ def run_for_development():
 
     # Load pool
     script_dir = Path(__file__).resolve().parent.parent
-    pool_file = script_dir / "pool_level_1_easy.npy"
+    pool_file = script_dir / "pool_scenario_1.npy"
     trajectory_database = np.load(pool_file, mmap_mode='r')
     pool_capacity = trajectory_database.shape[0]
 
