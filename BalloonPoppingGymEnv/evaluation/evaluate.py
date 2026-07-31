@@ -136,6 +136,24 @@ def load_pool_parameters():
 
     return scenario_parameters, given_parameters
 
+def load_static_parameters():
+    parameter_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "../envs/scenario_parameters"
+    )
+
+    parameters_path = os.path.join(parameter_dir, "static_env_parameters.yaml")
+    with open(parameters_path, "r", encoding="utf-8-sig") as file:
+        scenario_parameters = yaml.safe_load(file)
+
+    given_params_path = os.path.join(parameter_dir, "static_env_given_parameters.yaml")
+    with open(given_params_path, "r", encoding="utf-8-sig") as file:
+        given_parameters_spec = yaml.safe_load(file)
+
+    given_parameters = _extract_nested_parameters(
+        scenario_parameters, given_parameters_spec
+    )
+
+    return scenario_parameters, given_parameters
 
 def evaluate_scenario(
     agent_class,

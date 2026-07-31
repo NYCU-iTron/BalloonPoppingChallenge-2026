@@ -1,6 +1,6 @@
 # Scenario metadata
 scenario:
-  number: 2
+  number: 0
   random_seed: 0 # Use null to enable random seeding
 
 # Launch site and atmosphere setup
@@ -31,7 +31,7 @@ balloon:
   positions:
     - [0, 0, 100]
     # - [0, 20, 150]
-    # - [20, 0, 200]
+    - [20, 0, 200]
     # - [20, 20, 250]
     - [0, 40, 300]
   num: 10 # number of balloons (ignored when `positions` is set)
