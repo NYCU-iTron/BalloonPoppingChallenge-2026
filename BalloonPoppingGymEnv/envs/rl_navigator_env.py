@@ -159,6 +159,9 @@ class RLNavigatorEnv(gym.Wrapper):
                 if burn_elapsed >= self.controller.burn_time + 5.0:
                     truncated = True
 
+            if not (terminated or truncated) and info.get("popped_count", 0) == self.num_balloons:
+                truncated = True
+
             if terminated or truncated:
                 break
 
