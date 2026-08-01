@@ -4,14 +4,10 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Selector:
-    # Waiting on the pad is free -- propellant only burns after ignition, and
-    # the flight is far shorter than the episode -- so the gate is chosen for
-    # geometry. It sets the altitude band the vehicle fights in, and lateral
-    # authority there is what limits the score: ~3 m/s^2 with a 60 m column,
-    # ~6.4 m/s^2 with a 120 m one. A longer column also tolerates a faster
-    # climb without flying out of the top. Balloons rise ~6 m/s, so 120 m fires
-    # near 20 s and still leaves every release inside the burn.
-    LAUNCH_GATE_AGL = 120.0    # (m)
+    # Fixed launch time instead of an altitude/state-based gate -- simpler,
+    # and doesn't degenerate when a run uses fewer balloons than the real
+    # field. ~6 m/s balloon rise rate to clear a 120m engagement floor.
+    LAUNCH_TIME = 20.0         # (s)
 
     # Minimum altitude for an opening target. Lower balloons are unreachable at
     # T/W ~1.2, but with the gate above there are now many candidates rather
@@ -45,10 +41,6 @@ class Selector:
         self.ground_elevation = float(env_cfg[Schema.Given.Environment.ELEVATION])
         balloon_cfg = given_parameters[Schema.Given.Section.BALLOON]
         self.balloon_radius = float(balloon_cfg[Schema.Given.Balloon.RADIUS])
-        # Waiting past the final release only shrinks the field, so that time
-        # backstops the altitude gate if the balloons climb slower than assumed.
-        self.last_release_time = (float(balloon_cfg[Schema.Given.Balloon.NUM]) - 1.0) \
-            * float(balloon_cfg[Schema.Given.Balloon.RELEASE_INTERVAL])
 
         self.current_target_idx = None
 
@@ -58,24 +50,7 @@ class Selector:
         self.current_target_idx = None
 
     def should_launch(self, observation: dict) -> bool:
-        raw_balloons = np.asarray(observation[Schema.Observation.BALLOON_STATES], dtype=float)
-        if raw_balloons.size == 0:
-            return True
-
-        status = np.asarray(observation[Schema.Observation.BALLOON_STATUS], dtype=int).reshape(-1)
-        airborne = status == 1
-        if not airborne.any():
-            return False
-
-        # Static or descending targets will not come to us -- engage now.
-        if float(np.max(raw_balloons[airborne, 5])) <= 0.1:
-            return True
-
-        if float(observation[Schema.Observation.SIMULATION_TIME]) >= self.last_release_time:
-            return True
-
-        highest_agl = float(np.max(raw_balloons[airborne, 2])) - self.ground_elevation
-        return highest_agl >= self.LAUNCH_GATE_AGL
+        return float(observation[Schema.Observation.SIMULATION_TIME]) >= self.LAUNCH_TIME
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """[inclination, heading] in degrees, tipping the rail toward the
