@@ -15,6 +15,7 @@ class RewardCalculator:
         self.base_zem_weight = 0.2 * dense_budget
         self.worst_phi_dist = 2.0
         self.worst_phi_zem = 2.0
+        self.phi_worst = -1.0
 
         # Safeguard lower bounds
         self.min_ref_dist = 5.0
@@ -26,17 +27,15 @@ class RewardCalculator:
 
         # PBRS state memory
         self.prev_target_idx = None
-        self.prev_valid = False
-        self.prev_phi_dist = None
-        self.prev_phi_zem = None
+        self.prev_phi_dist = self.phi_worst
+        self.prev_phi_zem = self.phi_worst
 
     def reset(self) -> None:
         self.curr_ref_dist = 100.0
         self.curr_ref_zem_dist = 30.0
         self.prev_target_idx = None
-        self.prev_valid = False
-        self.prev_phi_dist = None
-        self.prev_phi_zem = None
+        self.prev_phi_dist = self.phi_worst
+        self.prev_phi_zem = self.phi_worst
 
     def compute(
         self,
@@ -78,66 +77,49 @@ class RewardCalculator:
             or target_state is None
             or np.isnan(target_state).any()
         )
+        switched = target_idx != self.prev_target_idx
 
         if is_invalid_target:
-            self.prev_valid = False
-            reward = terminated_penalty + pop_reward
-            return reward, {
-                "terminated": terminated_penalty,
-                "pop": pop_reward,
-                "approach": 0.0,
-                "zem": 0.0,
-            }
-
-        rel_pos = target_state[0:3] - rocket_state[0:3]
-        rel_vel = rocket_state[3:6] - target_state[3:6]
-
-        dist = float(np.linalg.norm(rel_pos))
-        unit_los = rel_pos / max(dist, 1e-9)
-
-        # Continuity check against previous step
-        is_continuous = (
-            self.prev_valid
-            and self.prev_target_idx == target_idx
-            and self.prev_phi_dist is not None
-            and self.prev_phi_zem is not None
-        )
-
-        # zem dist
-        rel_speed_sq = float(np.dot(rel_vel, rel_vel))
-        if rel_speed_sq > 1e-6:
-            closing_vel = float(np.dot(rel_vel, unit_los))
-            t_go = max(dist * closing_vel, 0.0) / rel_speed_sq
-            zem_dist = float(np.linalg.norm(rel_pos - rel_vel * t_go))
+            phi_dist = self.phi_worst
+            phi_zem = self.phi_worst
         else:
-            zem_dist = dist
+            rel_pos = target_state[0:3] - rocket_state[0:3]
+            rel_vel = rocket_state[3:6] - target_state[3:6]
 
-        # Mark current state as valid for next step
-        self.prev_valid = True
+            dist = float(np.linalg.norm(rel_pos))
+            unit_los = rel_pos / max(dist, 1e-9)
 
-        # Lock per-engagement reference on lock-on
-        if not is_continuous:
-            self.curr_ref_dist = max(dist, self.min_ref_dist)
-            self.curr_ref_zem_dist = max(zem_dist, self.min_ref_zem_dist)
+            # zem dist
+            rel_speed_sq = float(np.dot(rel_vel, rel_vel))
+            if rel_speed_sq > 1e-6:
+                closing_vel = float(np.dot(rel_vel, unit_los))
+                t_go = max(dist * closing_vel, 0.0) / rel_speed_sq
+                zem_dist = float(np.linalg.norm(rel_pos - rel_vel * t_go))
+            else:
+                zem_dist = dist
 
-        # Distance potential (normalized to -1.0 -> 0.0)
-        phi_dist = -min(dist / self.curr_ref_dist, self.worst_phi_dist)
+            # Lock per-engagement reference on lock-on
+            if switched:
+                self.curr_ref_dist = max(dist, self.min_ref_dist)
+                self.curr_ref_zem_dist = max(zem_dist, self.min_ref_zem_dist)
 
-        # ZEM potential
-        phi_zem = -min(zem_dist / self.curr_ref_zem_dist, self.worst_phi_zem)
+            # Distance potential (normalized to -1.0 -> 0.0)
+            phi_dist = -min(dist / self.curr_ref_dist, self.worst_phi_dist)
 
-        approach_reward = 0.0
-        zem_reward = 0.0
-        if is_continuous:
-            approach_reward = self.base_approach_weight * (
-                phi_dist - self.prev_phi_dist
-            )
+            # ZEM potential
+            phi_zem = -min(zem_dist / self.curr_ref_zem_dist, self.worst_phi_zem)
+
+        if switched and pop_count > 0:
+            approach_reward = 0.0
+            zem_reward = 0.0
+        else:
+            approach_reward = self.base_approach_weight * (phi_dist - self.prev_phi_dist)
             zem_reward = self.base_zem_weight * (phi_zem - self.prev_phi_zem)
 
         # Update memory
         self.prev_phi_dist = phi_dist
         self.prev_phi_zem = phi_zem
-        self.prev_target_idx = target_idx
+        self.prev_target_idx = None if is_invalid_target else target_idx
 
         # ----------------------------------- Total ---------------------------------- #
         reward = terminated_penalty + pop_reward + approach_reward + zem_reward
