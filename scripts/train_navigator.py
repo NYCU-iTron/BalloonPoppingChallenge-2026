@@ -122,6 +122,7 @@ def main():
         gae_lambda=0.97,
         target_kl=0.02,
         ent_coef=entropy_coeff,
+        use_sde=True,
         policy_kwargs=policy_kwargs,
         tensorboard_log=str(run_dir / "tensorboard")
     )
