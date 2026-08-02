@@ -36,7 +36,7 @@ def main():
 
     entropy_coeff = 1e-4
 
-    n_evals = 50
+    n_evals = 25
     n_saves = 10
     eval_freq = max(total_timesteps // (n_train_envs * n_evals), 1)
     save_freq = max(total_timesteps // (n_train_envs * n_saves), 1)
