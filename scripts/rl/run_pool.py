@@ -27,9 +27,9 @@ def run_for_development():
 
     # Setup agent
     runs_dir = Path(__file__).resolve().parent.parent / "runs"
-    checkpoint_dir = runs_dir / "2026-07-30-0057" / "checkpoints"
-    model_path = checkpoint_dir / "rl_model_5600000_steps.zip"
-    vecnormalize_path = checkpoint_dir / "rl_model_vecnormalize_5600000_steps.pkl"
+    checkpoint_dir = runs_dir / "2026-08-01-1527" / "eval_best"
+    model_path = checkpoint_dir / "best_model.zip"
+    vecnormalize_path = checkpoint_dir / "vecnormalize.pkl"
     agent = RLAgent(given_parameters, model_path, vecnormalize_path)
 
     observation, info = env.reset(seed=scenario_parameters["scenario"]["random_seed"])
