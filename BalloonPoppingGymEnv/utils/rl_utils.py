@@ -35,9 +35,8 @@ def compute_rl_observation(rocket_state, target_state):
     rocket_vel = rocket_state[3:6]
 
     rocket_z = rocket_state[2]
-    target_z = target_state[2]
 
-    rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [rocket_z, target_z]]).astype(np.float32)
+    rl_obs = np.concatenate([rel_pos, rel_vel, rocket_vel, [rocket_z]]).astype(np.float32)
     rl_obs = np.nan_to_num(rl_obs, nan=0.0, posinf=1e4, neginf=-1e4)
 
     return rl_obs
