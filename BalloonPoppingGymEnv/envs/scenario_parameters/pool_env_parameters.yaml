@@ -24,7 +24,7 @@ simulation:
 # Balloon model and uncertainty parameters
 balloon:
   release_interval: 0.5 # (sec) time interval between balloon releases (matches scenario 1)
-  num: 100 # number of balloons (matches scenario 1; ignored when `positions` is set)
+  num: 1 # number of balloons (matches scenario 1; ignored when `positions` is set)
   radius: 1.5 # (m) radius of the balloon
   mass: 0.8 # (kg) mass of the balloon
   inertia: [1, 1, 1] # (kg*m^2) inertia of the balloon
