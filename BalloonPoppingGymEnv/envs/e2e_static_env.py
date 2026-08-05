@@ -1,10 +1,11 @@
 import gymnasium as gym
 
 from BalloonPoppingGymEnv.utils.schema import Schema
-from BalloonPoppingGymEnv.utils.reward_calculator import RewardCalculator
+from BalloonPoppingGymEnv.utils.static_reward_calculator import StaticRewardCalculator
 from BalloonPoppingGymEnv.utils.e2e_utils import (
     action_space,
     observation_space,
+    RLObservator,
     launch_schedule,
     scale_rl_action,
 )
@@ -15,7 +16,8 @@ class E2EStaticEnv(gym.Wrapper):
 
         self.env = env
         self.num_balloons = 1
-        self.reward_calculator = RewardCalculator(given_parameters)
+        self.rl_observator = RLObservator(given_parameters)
+        self.reward_calculator = StaticRewardCalculator(given_parameters)
 
         self.action_space = action_space
         self.observation_space = observation_space
@@ -26,7 +28,10 @@ class E2EStaticEnv(gym.Wrapper):
 
         self.reward_calculator.reset()
         self.env.reset(seed=seed, options=options)
-        rl_obs, info = launch_schedule(self.env)
+        observation, info = launch_schedule(self.env, self.rl_observator)
+
+        target_state = observation[Schema.Observation.BALLOON_STATES][0]
+        rl_obs = self.rl_observator.get_rl_obs(target_state=target_state)
 
         return rl_obs, info
 
@@ -37,7 +42,7 @@ class E2EStaticEnv(gym.Wrapper):
 
         action = {
             "launch": True,
-            "launch_inclination_heading": self.launch_inclination_heading,
+            "launch_inclination_heading": [0, 0],
             "tvc": tvc,
             "roll": roll,
             "throttle": throttle,
@@ -47,21 +52,23 @@ class E2EStaticEnv(gym.Wrapper):
         pop_count += reward
 
         # Update states
-        simulation_time = observation[Schema.Observation.SIMULATION_TIME]
+        self.rl_observator.update_state(observation)
 
         # Check truncated
-        if self.controller.burnout and not (terminated or truncated):
-            burn_elapsed = simulation_time - self.controller.ignition_time
-            if burn_elapsed >= self.controller.burn_time + 5.0:
-                truncated = True
+        if self.rl_observator.burnout and not (terminated or truncated):
+            truncated = True
 
         if not (terminated or truncated) and info.get("popped_count", 0) == self.num_balloons:
             truncated = True
 
-        # Select target
-
         # Get target state
-        raw_balloon_states = observation[Schema.Observation.BALLOON_STATES]
+        target_state = observation[Schema.Observation.BALLOON_STATES][0]
+
+        # Get rl observation
+        rl_obs = self.rl_observator.get_rl_obs(
+            target_state=target_state,
+            action=action,
+        )
 
         rl_reward, rl_reward_dict = self.reward_calculator.compute(
             observation=observation,
