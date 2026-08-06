@@ -39,6 +39,20 @@ observation_space = spaces.Box(
     dtype=np.float32
 )
 
+def make_custom_env(scenario_params, given_params):
+    def _init():
+        from BalloonPoppingGymEnv.envs.static_balloon_world import BalloonPoppingEnv
+        from BalloonPoppingGymEnv.envs.e2e_static_env import E2EStaticEnv
+
+        raw_env = BalloonPoppingEnv(render_mode=None, parameters=scenario_params)
+        return E2EStaticEnv(raw_env, given_params)
+    return _init
+
+def linear_schedule(initial_value, final_value):
+    def schedule(progress_remaining):
+        return final_value + progress_remaining * (initial_value - final_value)
+    return schedule
+
 def scale_rl_action(normalized_action: np.ndarray) -> tuple[np.ndarray, float, float]:
     max_roll_torque = 10
     gimbal_range = 15
@@ -46,6 +60,13 @@ def scale_rl_action(normalized_action: np.ndarray) -> tuple[np.ndarray, float, f
 
     roll = normalized_action[0] * max_roll_torque
     tvc = normalized_action[1:3] * gimbal_range
+    # tvc/roll's plain `value * max` scaling only works because those ranges
+    # are symmetric about 0; throttle_range=[0,1] is not, so the same
+    # pattern would let a negative action produce negative throttle
+    # (unclamped downstream). Proper [-1,1] -> [lo,hi] rescale instead.
+    throttle = throttle_range[0] + (normalized_action[3] + 1.0) * 0.5 * (
+        throttle_range[1] - throttle_range[0]
+    )
 
     return tvc, roll, throttle
 
