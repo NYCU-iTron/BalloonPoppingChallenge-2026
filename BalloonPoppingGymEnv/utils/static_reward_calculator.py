@@ -30,6 +30,17 @@ class StaticRewardCalculator:
         self.curve_window_back = 50
         self.curve_window_fwd = 200
 
+        # Attitude stability (every step, not PBRS -- there's no natural
+        # "goal state" to define a potential over, just a continuous safety
+        # cost). sin_alpha/sin_beta are already clipped to [-1,1] by
+        # RLObservator, so this term is naturally bounded per step
+        # ([0,2]*weight) without needing its own clamp. Proposed/adjustable:
+        # picked so a sustained, meaningfully unstable episode (~0.2-0.3
+        # average sin^2 sum over a few hundred steps) accumulates a penalty
+        # on the same order as the approach/zem dense budget, without a
+        # near-zero-AoA episode ever accumulating much at all.
+        self.stability_weight = 0.5
+
         # Safeguard lower bounds
         self.min_ref_dist = 5.0
         self.min_ref_zem_dist = 2.0
@@ -73,6 +84,8 @@ class StaticRewardCalculator:
         target_state: np.ndarray,
         terminated: bool,
         info: dict,
+        sin_alpha: float,
+        sin_beta: float,
     ) -> tuple[float, dict]:
 
         # ---------------------------------- Sparse ---------------------------------- #
@@ -171,14 +184,19 @@ class StaticRewardCalculator:
         self.prev_phi_curve = phi_curve
         self.prev_target_idx = None if is_invalid_target else target_idx
 
+        # Attitude stability -- independent of target lock-on, a continuous
+        # per-step cost rather than a PBRS potential (see __init__ comment).
+        stability_penalty = -self.stability_weight * (sin_alpha ** 2 + sin_beta ** 2)
+
         # ----------------------------------- Total ---------------------------------- #
-        reward = terminated_penalty + pop_reward + approach_reward + zem_reward + curve_reward
+        reward = terminated_penalty + pop_reward + approach_reward + zem_reward + curve_reward + stability_penalty
         reward_dict = {
             "terminated": terminated_penalty,
             "pop": pop_reward,
             "approach": approach_reward,
             "zem": zem_reward,
             "curve": curve_reward,
+            "stability": stability_penalty,
         }
 
         return reward, reward_dict

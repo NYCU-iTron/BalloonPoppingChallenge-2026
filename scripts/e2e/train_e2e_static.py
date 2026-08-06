@@ -20,7 +20,7 @@ def main():
     torch.set_num_threads(1)
 
     n_train_envs = 20
-    total_timesteps = 8_000_000
+    total_timesteps = 4_000_000
 
     n_steps = 2048
     batch_size = 1024
@@ -30,10 +30,10 @@ def main():
     policy_size = 256
 
     time_step = 0.01
-    horizon_seconds = 30.0
+    horizon_seconds = 15.0
     gamma = 1.0 - (time_step) / horizon_seconds
 
-    entropy_coeff = 1e-4
+    entropy_coeff = 1e-3
 
     n_evals = 20
     n_saves = 10

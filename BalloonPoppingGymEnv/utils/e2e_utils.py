@@ -84,6 +84,8 @@ class RLObservator:
         self.rocket_vel = np.zeros(3)
         self.rocket_acc = np.zeros(3)
         self.rocket_gyro = np.zeros(3)
+        self.sin_alpha = 0.0
+        self.sin_beta = 0.0
         self.prev_tvc = np.zeros(2)
         self.prev_roll = 0.0
         self.prev_throttle = 0.0
@@ -165,11 +167,11 @@ class RLObservator:
         speed = float(np.linalg.norm(self.rocket_vel))
         min_speed = 1.0
         if speed > min_speed:
-            sin_alpha = float(np.clip(rocket_body_vel[0] / speed, -1.0, 1.0))
-            sin_beta = float(np.clip(rocket_body_vel[1] / speed, -1.0, 1.0))
+            self.sin_alpha = float(np.clip(rocket_body_vel[0] / speed, -1.0, 1.0))
+            self.sin_beta = float(np.clip(rocket_body_vel[1] / speed, -1.0, 1.0))
         else:
-            sin_alpha = 0.0
-            sin_beta = 0.0
+            self.sin_alpha = 0.0
+            self.sin_beta = 0.0
 
         return np.concatenate([
             [aim_angle, dist],
@@ -181,7 +183,7 @@ class RLObservator:
             self.rocket_acc,
             self.rocket_quat,
             self.rocket_gyro,
-            [sin_alpha, sin_beta],
+            [self.sin_alpha, self.sin_beta],
             self.prev_tvc,
             [self.prev_roll, self.prev_throttle],
         ]).astype(np.float32)
