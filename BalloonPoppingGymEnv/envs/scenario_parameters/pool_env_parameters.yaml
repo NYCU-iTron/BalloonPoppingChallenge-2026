@@ -1,15 +1,15 @@
 # Scenario metadata
 scenario:
-  number: 2
+  number: 1
   random_seed: 0 # Use null to enable random seeding
 
 # Launch site and atmosphere setup
 environment:
-  date: [2025, 7, 26, 0]
+  date: [2025, 7, 25, 8]
   latitude: 22.1749259 # (deg) latitude of the launch origin
   longitude: 120.8922531 # (deg) longitude of the launch origin
   elevation: 20.0 # (m) elevation above sea level
-  atmosphere_data_filename: null # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
+  atmosphere_data_filename: TW_Cup_250726_NetCDF4_Ensemble.nc # filename of the atmosphere data in the envs/data folder, or null to use standard atmosphere
   gust:
     enable: false
     altitude_spacing: 10.0 # (m) vertical spacing between gust samples
@@ -19,22 +19,12 @@ environment:
 # Simulation timing configuration
 simulation:
   time_step: 0.01 # (sec) time step for Gym environment, ActiveRocketPy controller, and balloon simulation
-  max_time: 100 # (sec) maximum simulation time of the scenario
+  max_time: 150 # (sec) maximum simulation time of the scenario
 
 # Balloon model and uncertainty parameters
 balloon:
-  release_interval: 1 # (sec) time interval between balloon releases
-  # Custom balloon coordinates [x, y, z] in meters (ENU sim frame, z = height
-  # above sea level). When set, the number of balloons equals the number of
-  # coordinates listed here and overrides `num` below. Set to null to fall back
-  # to the default auto-stacked placement using `num`.
-  positions:
-    - [0, 0, 100]
-    # - [0, 20, 150]
-    # - [20, 0, 200]
-    # - [20, 20, 250]
-    - [0, 40, 300]
-  num: 10 # number of balloons (ignored when `positions` is set)
+  release_interval: 0.5 # (sec) time interval between balloon releases
+  num: 100 # number of balloons
   radius: 1.5 # (m) radius of the balloon
   mass: 0.8 # (kg) mass of the balloon
   inertia: [1, 1, 1] # (kg*m^2) inertia of the balloon
@@ -44,8 +34,8 @@ balloon:
     cD: 1.0
     moment_damping: -0.01
   stochastic: # monte carlo stochastic parameters for generating balloons
-    latitude_std: 0.1 # (deg) standard deviation of latitude
-    longitude_std: 0.1 # (deg) standard deviation of longitude
+    latitude_std: 0.001 # (deg) standard deviation of latitude
+    longitude_std: 0.001 # (deg) standard deviation of longitude
     mass_std: 0.2 # (kg) standard deviation of mass
     volume_std: 0.5 # (m^3) standard deviation of volume
     inertia_std: 0.1 # (kg*m^2) standard deviation of inertia
@@ -62,7 +52,7 @@ rocket:
     flux_time: 30 # (sec) flux time for the liquid oxidizer
     initial_liquid_mass: 13.9 # (kg) initial mass of the liquid oxidizer
     initial_gas_mass: 2.13 # (kg) initial mass of the gas
-    liquid_mass_flow_rate_out: 0.425 # (kg/s) mass flow rate of the liquid out of the tank at full thrust
+    liquid_mass_flow_rate_out: 0.425 # (kg/s) mass flow rate of the liquid oxidizer out of the tank at full thrust
     tank_position: 1.4 # (m) position of the center of the tank (relative to the motor frame)
   motor:
     thrust_source: 1080 # (N) thrust at full throttle
@@ -94,14 +84,14 @@ rocket:
     kind: vonKarman # type of the nose cone
     position: 1.5 # (m) position of the nose cone tip (relative to the rocket frame)
   fins:
-    useFins: true # whether to use fins in the simulation
-    n: 4 # number of fins
+    useFins: true
+    n: 4
     span: 0.4 # (m) span of the fins
     root_chord: 0.5 # (m) root chord of the fins
     tip_chord: 0.2 # (m) tip chord of the fins
     position: -0.3 # (m) position of the fins (relative to the rocket frame)
   sensors:
-    sampling_rate: 100 # (Hz) sampling rate of the sensors
+    sampling_rate: 100
     gyro_position: 0 # (m) z-position of the gyroscope in body frame relative to the center of dry mass
     gyro_noise_density: 0.0 # (rad/s)/√Hz noise density of the gyroscope
     gyro_random_walk_density: 0.0 # (rad/s^2)/√Hz random walk density of the gyroscope
