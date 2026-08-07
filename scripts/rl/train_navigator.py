@@ -44,7 +44,7 @@ def main():
     n_eval_episodes = 10
 
     # -------------------------------- Directories ------------------------------- #
-    scripts_dir = Path(__file__).resolve().parent
+    scripts_dir = Path(__file__).resolve().parent.parent
     pool_path = scripts_dir / "pool_scenario_1.npy"
     pool_path_list = [
         pool_path
