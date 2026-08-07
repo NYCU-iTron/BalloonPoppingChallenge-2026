@@ -114,6 +114,7 @@ class E2EStaticEnv(gym.Wrapper):
             info=info,
             sin_alpha=self.rl_observator.sin_alpha,
             sin_beta=self.rl_observator.sin_beta,
+            tvc_norm=rl_action[1:3],
         )
 
         return rl_obs, rl_reward, terminated, truncated, info

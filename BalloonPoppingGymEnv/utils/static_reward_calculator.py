@@ -41,6 +41,18 @@ class StaticRewardCalculator:
         # near-zero-AoA episode ever accumulating much at all.
         self.stability_weight = 0.5
 
+        # TVC command magnitude (every step, not PBRS -- same rationale as
+        # stability above). Penalizes the raw normalized action components
+        # directly (already in [-1,1] by construction, same bound as
+        # sin_alpha/sin_beta) rather than the physically-scaled degrees, so
+        # no gimbal_range constant needs duplicating here. Kept smaller than
+        # stability_weight -- this is meant to gently discourage the mean
+        # from drifting to a permanently-saturated gimbal command (which
+        # both saturates torque authority pointlessly and, once saturated,
+        # stops responding to further reward gradient), not to suppress
+        # genuine corrective maneuvering.
+        self.tvc_weight = 0.1
+
         # Safeguard lower bounds
         self.min_ref_dist = 5.0
         self.min_ref_zem_dist = 2.0
@@ -86,6 +98,7 @@ class StaticRewardCalculator:
         info: dict,
         sin_alpha: float,
         sin_beta: float,
+        tvc_norm: np.ndarray,
     ) -> tuple[float, dict]:
 
         # ---------------------------------- Sparse ---------------------------------- #
@@ -188,8 +201,14 @@ class StaticRewardCalculator:
         # per-step cost rather than a PBRS potential (see __init__ comment).
         stability_penalty = -self.stability_weight * (sin_alpha ** 2 + sin_beta ** 2)
 
+        # TVC command magnitude -- same continuous-cost rationale.
+        tvc_penalty = -self.tvc_weight * float(np.dot(tvc_norm, tvc_norm))
+
         # ----------------------------------- Total ---------------------------------- #
-        reward = terminated_penalty + pop_reward + approach_reward + zem_reward + curve_reward + stability_penalty
+        reward = (
+            terminated_penalty + pop_reward + approach_reward + zem_reward + curve_reward
+            + stability_penalty + tvc_penalty
+        )
         reward_dict = {
             "terminated": terminated_penalty,
             "pop": pop_reward,
@@ -197,6 +216,7 @@ class StaticRewardCalculator:
             "zem": zem_reward,
             "curve": curve_reward,
             "stability": stability_penalty,
+            "tvc": tvc_penalty,
         }
 
         return reward, reward_dict
