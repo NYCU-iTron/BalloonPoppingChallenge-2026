@@ -33,7 +33,7 @@ def main():
     horizon_seconds = 15.0
     gamma = 1.0 - (time_step) / horizon_seconds
 
-    entropy_coeff = 1e-3
+    entropy_coeff = 5e-3
 
     n_evals = 20
     n_saves = 10
