@@ -1,3 +1,5 @@
+import numpy as np
+
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
@@ -23,6 +25,12 @@ class ITronAgent(BaseAgent):
         self.selector = Selector(given_parameters)
         self.navigator = Navigator(given_parameters)
         self.controller = Controller(given_parameters)
+
+        # Rebuilding the chain after every hit measures worse than flying the
+        # launch plan through: the search from a mid-plume origin keeps coming
+        # back with one or two targets where the original chain had four.
+        # Kept behind a switch because the diagnosis is not finished.
+        self.replan_after_hit = False
 
         self.should_launch = False
         self.launch_inclination_heading = None
@@ -53,9 +61,13 @@ class ITronAgent(BaseAgent):
             if not self.should_launch:
                 return dict(IDLE_ACTION)
 
-            # Run only once after should_launch become true
-            balloon_states = observation[Schema.Observation.BALLOON_STATES]
-            self.target_idx_list = self.selector.select_targets(balloon_states)
+            # Run only once after should_launch become true. The selector
+            # already searched a chain while deciding to go, so reuse it.
+            balloon_states = self.selector.active_states(observation)
+            self.target_idx_list = (
+                self.selector.pending_targets
+                or self.selector.select_targets(balloon_states)
+            )
 
             # No feasible target set: stay on the pad rather than launching blind.
             if not self.target_idx_list:
@@ -77,8 +89,26 @@ class ITronAgent(BaseAgent):
         rocket_state = self.estimator.estimate_rocket(observation)
 
         balloon_idx = self._current_target(observation)
+
+        # A target just retired. The plan's remaining legs were priced from a
+        # snapshot that is now seconds stale and the error grows down the chain,
+        # so rebuild the tail -- but leave the balloon the rocket is already
+        # committed to alone. Replanning from scratch at the moment of a hit
+        # throws away an approach the guidance has already shaped for, and
+        # measured 0.29 balloons worse; the accumulated error lives at the end
+        # of the chain, not the front.
+        if self.replan_after_hit and self.current_target_idx > 0 and balloon_idx is not None:
+            self._replan_tail(observation, rocket_state, t_since_launch, balloon_idx)
+
+        # Chain flown to the end. Any burn still left is worth another chain, and
+        # planning here costs nothing that was already committed -- unlike
+        # replanning mid-approach, there is no target being flown at to abandon.
+        if balloon_idx is None and self.selector.remaining_budget(t_since_launch) > 0.0:
+            self._replan_from_here(observation, rocket_state, t_since_launch)
+            balloon_idx = self._current_target(observation)
+
         if balloon_idx is None:
-            # Every selected target is gone; nothing left to steer towards.
+            # Nothing reachable left; stop steering.
             return {
                 "launch": True,
                 "launch_inclination_heading": self.launch_inclination_heading,
@@ -105,6 +135,56 @@ class ITronAgent(BaseAgent):
             "roll": roll,
             "throttle": throttle,
         }
+
+    def _replan_from_here(
+        self, observation: dict, rocket_state, t_since_launch: float
+    ) -> None:
+        """Start a fresh chain from the rocket's current state."""
+        rocket_vel = rocket_state[3:6]
+        speed = float(np.linalg.norm(rocket_vel))
+
+        chain = self.selector.select_targets(
+            self.selector.active_states(observation),
+            origin=rocket_state[0:3],
+            incoming_dir=rocket_vel / speed if speed > 1.0 else None,
+            time_budget=self.selector.remaining_budget(t_since_launch),
+            t_since_launch=t_since_launch,
+        )
+        if chain:
+            self.target_idx_list = chain
+            self.current_target_idx = 0
+
+    def _replan_tail(
+        self, observation: dict, rocket_state, t_since_launch: float, committed: int
+    ) -> None:
+        """Rebuild the chain beyond the balloon the rocket is already flying at."""
+        states = self.selector.active_states(observation)
+
+        arrival_time, arrival_pos, arrival_dir = self.selector.predict_arrival(
+            states[committed], rocket_state[0:3], rocket_state[3:6], t_since_launch
+        )
+
+        chain_start = t_since_launch + arrival_time
+        budget = self.selector.remaining_budget(chain_start)
+        if budget <= 0.0:
+            return
+
+        # Roll the field forward to the moment the tail actually begins, and take
+        # the committed balloon out of the running.
+        tail_states = states.copy()
+        tail_states[:, :3] += tail_states[:, 3:6] * arrival_time
+        tail_states[committed] = np.nan
+
+        tail = self.selector.select_targets(
+            tail_states,
+            origin=arrival_pos,
+            incoming_dir=arrival_dir,
+            time_budget=budget,
+            t_since_launch=chain_start,
+        )
+
+        self.target_idx_list = [committed] + list(tail or [])
+        self.current_target_idx = 0
 
     def _current_target(self, observation: dict) -> int | None:
         """Index of the target being engaged, skipping any already popped."""

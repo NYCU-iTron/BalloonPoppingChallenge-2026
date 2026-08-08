@@ -1,9 +1,40 @@
+import logging
+
 import numpy as np
+from BalloonPoppingGymEnv.agents.gnc.vehicle import Vehicle
 from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Selector:
     def __init__(self, given_parameters):
+        self.logger = logging.getLogger(__name__)
+
+        # Shared vehicle model, so the chain is budgeted against the same flight
+        # profile guidance will actually fly. Without it the DP picks chains on
+        # pure geometry and hands the rocket more balloons than 30 seconds of
+        # burn can reach -- the previous run engaged 3 of 8 before burnout.
+        self.vehicle = Vehicle(given_parameters)
+
+        # Fraction of the burn to spend; the rest is margin for the estimate
+        # being coarse and for a leg going worse than modelled.
+        self.time_budget_fraction = 0.95
+        self.time_weight = 5.0  # cost per second, to prefer quicker chains
+
+        # --- Launch timing ------------------------------------------------
+        # Every second spent waiting puts the nearest balloon further downwind,
+        # and reaching the first target is the single largest item in the burn
+        # budget. Measured over the trajectory pool: launching around t=20
+        # plans 3.38 targets against 2.12 for the old fixed t=70, with a broad
+        # plateau from t=10 to t=25. So launch as soon as a worthwhile chain is
+        # reachable rather than waiting for the whole field to be airborne.
+        self.earliest_launch_time = 10.0   # (s) below this too few are up
+        self.latest_launch_time = 30.0     # (s) stop holding out for a better chain
+        self.launch_evaluation_interval = 1.0  # (s) between replans while waiting
+        self.min_launch_chain = 5          # targets that make a launch worth taking
+
+        self._last_launch_evaluation = -np.inf
+        self.pending_targets = None
+
         # Balloon and rocket positions are reported as altitude above sea level,
         # so the launch pad sits at z = elevation, not at the coordinate origin.
         elevation = given_parameters[Schema.Given.Section.ENVIRONMENT][
@@ -12,12 +43,60 @@ class Selector:
         self.pad_origin = np.array([0.0, 0.0, float(elevation)])
 
     def reset(self):
-        pass
+        self._last_launch_evaluation = -np.inf
+        self.pending_targets = None
+
+    @staticmethod
+    def active_states(observation: dict) -> np.ndarray:
+        """Balloon states with grounded and popped balloons marked NaN.
+
+        The environment reports all balloons every step: unreleased ones sit at
+        their launch point and popped ones carry on flying, so position alone
+        cannot say which are in play. Only the status flag can. This was
+        harmless while the agent waited for the whole field to be airborne;
+        launching at t=10 with most balloons still on the ground would
+        otherwise hand the planner 80 targets that do not exist yet.
+        """
+        states = np.array(
+            observation[Schema.Observation.BALLOON_STATES], dtype=float
+        ).copy()
+        status = np.array(
+            observation[Schema.Observation.BALLOON_STATUS], dtype=int
+        ).flatten()
+        states[status != 1] = np.nan
+        return states
 
     def should_launch(self, observation: dict) -> bool:
-        launch_time = 70
-        should_launch = observation[Schema.Observation.SIMULATION_TIME] >= launch_time
-        return should_launch
+        """Launch as soon as a worthwhile chain is reachable.
+
+        Waiting is not free: the nearest balloon drifts further away every
+        second, and the leg out to the first target is the largest single item
+        in the burn budget. So plan on a coarse cadence and go as soon as the
+        plan is good enough, falling back to a deadline if it never is.
+
+        The chain found here is kept on ``pending_targets`` so the caller can
+        fly it without paying for the search twice.
+        """
+        simulation_time = float(observation[Schema.Observation.SIMULATION_TIME])
+        self.pending_targets = None
+
+        if simulation_time < self.earliest_launch_time:
+            return False
+
+        if simulation_time - self._last_launch_evaluation < self.launch_evaluation_interval:
+            return False
+        self._last_launch_evaluation = simulation_time
+
+        targets = self.select_targets(self.active_states(observation))
+        if not targets:
+            return False
+
+        deadline_reached = simulation_time >= self.latest_launch_time
+        if len(targets) >= self.min_launch_chain or deadline_reached:
+            self.pending_targets = targets
+            return True
+
+        return False
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """
@@ -48,19 +127,129 @@ class Selector:
         heading = np.array([90.0, heading_deg])
         return heading
 
-    def select_targets(self, balloon_states: np.ndarray) -> list[int] | None:
+    @staticmethod
+    def _position_at(balloon: dict, t: float) -> np.ndarray:
+        """Where a balloon will be ``t`` seconds after the plan is made."""
+        if not np.isfinite(t):
+            return balloon["pos"]
+        return balloon["pos"] + balloon["vel"] * t
+
+    def _predict_leg(
+        self,
+        balloon: dict,
+        from_pos: np.ndarray,
+        chain_depart: float,
+        t_since_launch: float,
+        turn_angle: float,
+    ) -> tuple[np.ndarray, float, float]:
+        """Leg to a balloon that keeps drifting while the rocket is on its way.
+
+        Arrival time and aim point define each other, so solve for them: guess an
+        arrival, move the balloon there, re-time the leg. Two passes are enough --
+        the aim point shifts by metres on the second.
+
+        Two clocks are in play and they are not the same once the agent replans
+        mid-flight: balloons are extrapolated from the moment the plan is made,
+        while the mass and thrust curve is read at time since launch.
+
+        Returns the leg vector, its length, and the time it takes.
+        """
+        arrival = chain_depart
+        leg = balloon["pos"] - from_pos
+        length = float(np.linalg.norm(leg))
+        leg_time = 0.0
+
+        for _ in range(2):
+            leg = self._position_at(balloon, arrival) - from_pos
+            length = float(np.linalg.norm(leg))
+            if length < 1e-9:
+                return leg, 0.0, 0.0
+            leg_time = self.vehicle.transit_time(
+                length,
+                turn_angle,
+                chain_depart + t_since_launch,
+                float(leg[2] / length),
+            )
+            arrival = chain_depart + leg_time
+
+        return leg, length, leg_time
+
+    def predict_arrival(
+        self,
+        target_state: np.ndarray,
+        rocket_pos: np.ndarray,
+        rocket_vel: np.ndarray,
+        t_since_launch: float,
+    ) -> tuple[float, np.ndarray, np.ndarray | None]:
+        """When and where the rocket will reach the target it is already on.
+
+        Used to replan everything *after* the committed target without
+        disturbing the approach to it.
+
+        Returns seconds to arrival, the arrival point, and the direction the
+        rocket will be travelling when it gets there.
+        """
+        balloon = {
+            "pos": np.asarray(target_state[:3], dtype=float),
+            "vel": np.asarray(target_state[3:6], dtype=float),
+        }
+        rocket_pos = np.asarray(rocket_pos, dtype=float)
+        speed = float(np.linalg.norm(rocket_vel))
+        incoming = np.asarray(rocket_vel, dtype=float) / speed if speed > 1.0 else None
+
+        leg, length, leg_time = self._predict_leg(
+            balloon, rocket_pos, 0.0, t_since_launch, 0.0
+        )
+        if length < 1e-9:
+            return 0.0, rocket_pos, incoming
+
+        direction = leg / length
+        if incoming is not None:
+            turn = float(np.arccos(np.clip(np.dot(incoming, direction), -1.0, 1.0)))
+            leg, length, leg_time = self._predict_leg(
+                balloon, rocket_pos, 0.0, t_since_launch, turn
+            )
+            direction = leg / max(length, 1e-9)
+
+        return leg_time, rocket_pos + leg, direction
+
+    def remaining_budget(self, t_since_launch: float) -> float:
+        """Burn time left to spend on a chain, in seconds."""
+        return max(
+            self.vehicle.burn_time * self.time_budget_fraction - t_since_launch, 0.0
+        )
+
+    def select_targets(
+        self,
+        balloon_states: np.ndarray,
+        origin: np.ndarray | None = None,
+        incoming_dir: np.ndarray | None = None,
+        time_budget: float | None = None,
+        t_since_launch: float = 0.0,
+    ) -> list[int] | None:
         """
         Parameters
         ----------
         balloon_states : np.ndarray
             Shape (N, 6) predicted states [x, y, z, vx, vy, vz]; NaN position
             marks inactive (unreleased or popped) balloons.
+        origin : np.ndarray | None
+            Where the chain starts. The launch pad by default; the rocket's
+            current position when replanning in flight.
+        incoming_dir : np.ndarray | None
+            Unit velocity the chain is entered with, so the first leg pays for
+            the turn out of it. None off the pad, where the rail is aimed at the
+            first target and there is no turn to pay for.
+        time_budget : float | None
+            Seconds of burn the chain may use. The whole burn by default.
+        t_since_launch : float
+            Where the vehicle already is on its mass and thrust curve.
 
         Returns
         -------
         list[int] | None
-            A list of 10 target balloon IDs ordered from T1 to T10,
-            or None if invalid.
+            Target balloon IDs ordered from T1 onwards, or None if no chain is
+            reachable.
         """
         # --- 1. 權重與門檻參數設定 ---
         dist_weight = 10.0  # 離主軸距離 (d_i) 的懲罰權重
@@ -75,13 +264,14 @@ class Selector:
         valid_mask = ~np.isnan(balloon_states[:, 0])
         valid_indices = np.where(valid_mask)[0]
 
-        K = 8  # 目標數量
-        if len(valid_indices) < K:
+        max_chain = 8  # 鏈長上限
+        if len(valid_indices) == 0:
             return None
 
         # 一律換算成「相對發射台」座標：主軸擬合、投影 s、離軸距離 d 與發射夾角
         # 都應該以發射台為原點，而不是海平面。
-        positions = balloon_states[valid_indices, :3] - self.pad_origin
+        chain_origin = self.pad_origin if origin is None else np.asarray(origin, dtype=float)
+        positions = balloon_states[valid_indices, :3] - chain_origin
         velocities = balloon_states[valid_indices, 3:]
 
         # --- 3. (r, z) 擬合斜率 + 速度對齊生成 3D 主軸向量 u ---
@@ -99,22 +289,38 @@ class Selector:
             else np.array([1.0, 0.0])
         )
 
-        main_axis = np.array([dir_xy[0], dir_xy[1], slope])
+        if origin is None:
+            main_axis = np.array([dir_xy[0], dir_xy[1], slope])
+        else:
+            # Replanning from inside the plume: the (r, z) slope fit needs an
+            # origin the balloons are all in front of. With the rocket among
+            # them r loses its meaning and the fitted slope becomes noise, which
+            # is what left mid-flight replans finding one target where the
+            # launch plan found four. The plume's own mean velocity gives the
+            # same axis without depending on where the origin sits.
+            main_axis = np.mean(velocities, axis=0)
+            if np.linalg.norm(main_axis) < 1e-5:
+                main_axis = np.array([dir_xy[0], dir_xy[1], slope])
+
         u = main_axis / np.linalg.norm(main_axis)
 
         # --- 4. 計算投影高度 s 與垂直離軸距離 d，並按 s 排序 ---
         s_vals = np.dot(positions, u)
         valid_balloons = []
 
-        for idx, pos, s_val in zip(valid_indices, positions, s_vals):
+        for idx, pos, vel, s_val in zip(valid_indices, positions, velocities, s_vals):
             if s_val > 0:  # 只考慮原點前方的氣球
                 d_val = np.linalg.norm(pos - s_val * u)
                 valid_balloons.append(
-                    {"id": int(idx), "pos": pos, "s": s_val, "d": d_val}
+                    {"id": int(idx), "pos": pos, "vel": vel, "s": s_val, "d": d_val}
                 )
 
-        if len(valid_balloons) < K:
+        # K 是上限而不是下限。要求「原點前方至少 8 顆」對從發射台規劃來說沒問題
+        # ——整片氣球場都在前方——但中途重規劃時原點已經在羽流內部，s > 0 會擋掉
+        # 一半以上的候選，硬性下限會讓尾巴永遠規劃不出東西。
+        if not valid_balloons:
             return None
+        K = min(max_chain, len(valid_balloons))
 
         # 依主軸進度 s 由低到高排序 (天然保證單向推進)
         sorted_balloons = sorted(valid_balloons, key=lambda b: b["s"])
@@ -123,41 +329,70 @@ class Selector:
         # --- 5. DP 演算法實作 ---
         dp = np.full((N, K + 1), float("inf"))
         parent = np.full((N, K + 1), -1, dtype=int)
-        origin = np.array([0.0, 0.0, 0.0])  # 發射台，因 positions 已是相對座標
+        chain_start = np.array([0.0, 0.0, 0.0])  # 鏈的起點，因 positions 已是相對座標
+
+        # 沿著最佳成本路徑累計的飛行時間，用來剔除燒完前飛不完的鏈
+        elapsed = np.full((N, K + 1), float("inf"))
+        if time_budget is None:
+            time_budget = self.vehicle.burn_time * self.time_budget_fraction
 
         # Base Case: k = 1 (第一顆目標：不對原點算距離過近懲罰，只算離軸與發射夾角)
         for i in range(N):
-            pos_i = sorted_balloons[i]["pos"]
-
-            dir_origin = pos_i - origin
-            norm_orig = np.linalg.norm(dir_origin)
-            cos_a = (
-                np.clip(np.dot(u, dir_origin) / norm_orig, -1.0, 1.0)
-                if norm_orig > 1e-5
-                else 1.0
+            # 目標在抵達時刻的位置，而不是現在的位置。整條鏈是在發射瞬間規劃的，
+            # 但最後一顆要 30 秒後才會被追上，那時它已經飄走約 230 公尺 ——
+            # 用當下快照算出來的幾何，火箭實際飛的距離是規劃值的 2.31 倍。
+            dir_origin, norm_orig, leg_time = self._predict_leg(
+                sorted_balloons[i], chain_start, 0.0, t_since_launch, 0.0
             )
+            if norm_orig < 1e-5:
+                continue
+
+            # Off the pad the rail is aimed at this balloon, so there is no turn.
+            # Replanning in flight has to pay for turning out of the velocity the
+            # rocket already carries.
+            entry_turn = 0.0
+            if incoming_dir is not None:
+                entry_turn = float(
+                    np.arccos(np.clip(np.dot(incoming_dir, dir_origin / norm_orig), -1.0, 1.0))
+                )
+                leg_time = self.vehicle.transit_time(
+                    norm_orig, entry_turn, t_since_launch, float(dir_origin[2] / norm_orig)
+                )
+
+            if leg_time > time_budget:
+                continue
+
+            cos_a = np.clip(np.dot(u, dir_origin) / norm_orig, -1.0, 1.0)
             init_angle = np.degrees(np.arccos(cos_a))
 
             # Base Cost：只考慮離主軸距離與發射角
             dp[i][1] = (
                 dist_weight * sorted_balloons[i]["d"]
-                + angle_weight * init_angle
+                + angle_weight * (init_angle + np.degrees(entry_turn))
+                + self.time_weight * leg_time
             )
             parent[i][1] = -1
+            elapsed[i][1] = leg_time
 
         # DP State Transition: k = 2 -> K
         for k in range(2, K + 1):
             for i in range(N):
-                pos_i = sorted_balloons[i]["pos"]
-
                 for j in range(i):  # j < i 確保單向推進 (s_j < s_i)
                     if dp[j][k - 1] == float("inf"):
                         continue
 
-                    pos_j = sorted_balloons[j]["pos"]
+                    # 兩端都取抵達時刻的預測位置：離開 j 的時間是 elapsed[j][k-1]，
+                    # 抵達 i 的時間再由這一段本身決定（迭代一次收斂）。
+                    depart_time = elapsed[j][k - 1]
+                    pos_j = self._position_at(sorted_balloons[j], depart_time)
 
                     # 1) 【只在此處計算】兩顆氣球之間 (P_j -> P_i) 的距離與近距離懲罰
-                    segment_dist = np.linalg.norm(pos_i - pos_j)
+                    v2, segment_dist, _ = self._predict_leg(
+                        sorted_balloons[i], pos_j, depart_time, t_since_launch, 0.0
+                    )
+                    if segment_dist < 1e-5:
+                        continue
+                    pos_i = pos_j + v2
                     too_close_penalty = 0.0
                     if segment_dist < min_dist:
                         too_close_penalty = (
@@ -171,17 +406,19 @@ class Selector:
                         ) ** 2 * too_far_weight
 
                     # 2) 計算兩氣球之間的轉向折角 (P_prev -> P_j 與 P_j -> P_i)
+                    #    前一顆也要取它自己被抵達那一刻的位置。
                     prev_idx = parent[j][k - 1]
                     prev_pos = (
-                        origin
+                        chain_start
                         if prev_idx == -1
-                        else sorted_balloons[prev_idx]["pos"]
+                        else self._position_at(
+                            sorted_balloons[prev_idx], elapsed[prev_idx][k - 2]
+                        )
                     )
 
                     v1 = pos_j - prev_pos
-                    v2 = pos_i - pos_j
 
-                    n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+                    n1, n2 = np.linalg.norm(v1), segment_dist
                     turn_angle = (
                         np.degrees(
                             np.arccos(
@@ -192,31 +429,61 @@ class Selector:
                         else 0.0
                     )
 
-                    # 總代價 = 前一步 Cost + 離軸懲罰 + 轉向角懲罰 + 兩氣球間過近懲罰
+                    # 3) 可達性：這一段飛完會不會超出燃燒時間
+                    leg_time = self.vehicle.transit_time(
+                        float(segment_dist),
+                        np.radians(turn_angle),
+                        elapsed[j][k - 1] + t_since_launch,
+                        float(v2[2] / max(segment_dist, 1e-9)),
+                    )
+                    leg_elapsed = elapsed[j][k - 1] + leg_time
+                    if leg_elapsed > time_budget:
+                        continue
+
+                    # 總代價 = 前一步 Cost + 離軸懲罰 + 轉向角懲罰 + 兩氣球間過近懲罰 + 時間
                     cost = (
                         dp[j][k - 1]
                         + dist_weight * sorted_balloons[i]["d"]
                         + angle_weight * turn_angle
                         + too_close_penalty
                         + too_far_penalty
+                        + self.time_weight * leg_time
                     )
 
                     if cost < dp[i][k]:
                         dp[i][k] = cost
                         parent[i][k] = j
+                        elapsed[i][k] = leg_elapsed
 
-        # --- 6. 回溯找出最佳序列 (T1 -> T10) ---
-        best_last_idx = int(np.argmin(dp[:, K]))
-        if dp[best_last_idx, K] == float("inf"):
+        # --- 6. 回溯找出最佳序列 ---
+        # K 現在是「上限」而非硬性數量：時間預算可能撐不到 K 顆，這時回傳飛得完
+        # 的最長鏈，比回傳 None 或一條飛不完的鏈都有用。
+        best_k = 0
+        for k in range(K, 0, -1):
+            if np.isfinite(dp[:, k]).any():
+                best_k = k
+                break
+
+        if best_k == 0:
             return None
 
-        curr = best_last_idx
+        curr = int(np.argmin(dp[:, best_k]))
         target_ids = []
-        for k in range(K, 0, -1):
+        leg_finish_times = []
+        for k in range(best_k, 0, -1):
             target_ids.append(sorted_balloons[curr]["id"])
+            leg_finish_times.append(elapsed[curr][k])
             curr = parent[curr][k]
 
         target_ids.reverse()
+        leg_finish_times.reverse()
+
+        legs = np.diff([0.0] + leg_finish_times)
+        self.logger.info(
+            f"Chain of {best_k}/{K} targets within a {time_budget:.1f} s budget: "
+            f"{target_ids} (legs {np.round(legs, 1).tolist()} s, "
+            f"total {leg_finish_times[-1]:.1f} s)"
+        )
         return target_ids
 
     def check_target_popped(self, target_idx: int, observation: dict) -> bool:

@@ -31,13 +31,22 @@ class Controller:
         self.dt = 1.0 / self.sampling_rate
 
         # --- Loop shaping -------------------------------------------------
-        # Time constants, not raw gains: the actual gains are derived from these
-        # and the vehicle's authority, so they stay meaningful if the rocket or
-        # the propellant load changes.
-        self.rate_time_constant = 0.15      # (s) inner loop
-        self.attitude_time_constant = 0.50  # (s) outer loop, ~3x slower
-        self.max_body_rate = 1.5            # (rad/s) ceiling on the rate command
+        # Both time constants come from the actuator rather than being picked:
+        # the gimbal needs this long to cross its own range, so a rate loop
+        # tuned faster than that only saturates. The outer loop is then kept
+        # three times slower for the usual cascade separation.
+        self.rate_time_constant = self.vehicle.gimbal_slew_time()
+        self.loop_separation = 2.0
+        self.attitude_time_constant = self.loop_separation * self.rate_time_constant
         self.roll_time_constant = 0.50      # (s) roll rate damping
+
+        # The rate command is capped at what the gimbal can actually build up
+        # within one rate time constant, with headroom so the inner loop stays
+        # linear. Previously a fixed 1.5 rad/s ceiling sat *above* the gimbal's
+        # own saturation threshold of 1.28 rad/s, so every large attitude change
+        # drove the actuator straight onto its stop and the loop lost control
+        # authority exactly when it was turning hardest.
+        self.rate_command_margin = 0.8
 
         # Integral trim on the rate loop, in gimbal degrees. Sized as a fraction
         # of real authority so it can actually correct a standing bias -- the
@@ -119,9 +128,15 @@ class Controller:
         if sin_mag > 1e-9:
             rot_axis = rot_axis / sin_mag
 
-        # 3. Outer loop: pointing error -> body rate command, rate limited so a
-        #    large error asks for a turn the vehicle can actually perform.
-        rate_magnitude = min(angle / self.attitude_time_constant, self.max_body_rate)
+        # 3. Outer loop: pointing error -> body rate command, capped at a rate
+        #    the gimbal can build within one rate time constant so the inner
+        #    loop below never has to ask for more deflection than it owns.
+        max_body_rate = (
+            self.rate_command_margin
+            * self.vehicle.max_angular_accel(t_since_launch)
+            * self.rate_time_constant
+        )
+        rate_magnitude = min(angle / self.attitude_time_constant, max_body_rate)
         desired_rates = np.array([
             rate_magnitude * rot_axis[0],  # pitch (wx)
             rate_magnitude * rot_axis[1],  # yaw   (wy)

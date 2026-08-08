@@ -52,11 +52,22 @@ class Navigator:
         self.terminal_control_time = 1.2  # (s)
         self.brake_time_constant = 0.8    # (s) how hard excess closing speed is bled off
 
+        # Braking only earns its keep when the approach is still going to miss.
+        # Shedding speed on a pass that is already inside the balloon throws away
+        # the momentum the next leg needs, and with a fixed 30 s burn that speed
+        # is the whole budget. So slow down for a bad approach, not for a close
+        # one.
+        self.miss_tolerance = float(
+            given_parameters[Schema.Given.Section.BALLOON][Schema.Given.Balloon.RADIUS]
+        )
+
         # A cruise ceiling on top of that. The range-proportional cap alone only
         # bites in the last second, by which point shedding the speed would need
         # far more deceleration than the vehicle owns; holding the run-in near
         # this speed instead keeps the braking gentle and always affordable.
-        self.max_closing_speed = 25.0     # (m/s)
+        # Shared with the vehicle's transit model so target selection budgets
+        # against the speed guidance will actually fly.
+        self.max_closing_speed = self.vehicle.cruise_speed
 
         # --- Diagnostics (read by tests and logging, never by the control path) ---
         self.t_go = None
@@ -275,6 +286,10 @@ class Navigator:
         (zero when the approach is already slow enough).
         """
         self.braking = False
+
+        # Already on track to pass inside the balloon: keep the speed.
+        if self.zem_miss is not None and self.zem_miss <= self.miss_tolerance:
+            return np.zeros(3)
 
         distance = float(np.linalg.norm(r_rel))
         if distance < 1e-6:
