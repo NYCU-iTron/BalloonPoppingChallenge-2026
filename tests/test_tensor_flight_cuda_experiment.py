@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
+from importlib.util import find_spec
+
 import numpy as np
+import pytest
 
 
 torch = pytest.importorskip("torch")
@@ -92,10 +94,9 @@ def test_moving_crossing_segments_match_official_pop_geometry() -> None:
 
 
 def test_segment_distance_matches_official_geometry_on_seeded_batch() -> None:
-    try:
-        from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
-    except ModuleNotFoundError:
+    if find_spec("BalloonPoppingGymEnv.envs.balloon_world") is None:
         pytest.skip("canonical simulation stack is unavailable")
+    from BalloonPoppingGymEnv.envs.balloon_world import BalloonPoppingEnv
 
     generator = np.random.default_rng(2026)
     rocket_start = np.array([-4.0, 1.5, 2.0])

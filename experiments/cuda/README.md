@@ -1,7 +1,8 @@
 # CUDA flight-environment experiment
 
-This directory answers a narrow question: can the single-balloon E2E flight
-environment gain useful training throughput from CUDA?
+This directory answers a narrow question: can the E2E flight environment gain
+useful training throughput from CUDA while remaining transferable to the
+official ActiveRocketPy simulator?
 
 The answer from the first experiment is **not by moving one RocketPy flight to
 the GPU**.  The useful architecture is a single process advancing a large
@@ -85,7 +86,7 @@ actual PPO worker count still requires an end-to-end sweep.
 ### Non-canonical batched tensor surrogate
 
 This result includes one fixed RK4 transition (`dt=0.01`), simplified 6-DoF,
-four E2E-compatible actions `[roll, tvc_x, tvc_y, throttle]`, actuator lag,
+four **post-launch** actions `[roll, tvc_x, tvc_y, throttle]`, actuator lag,
 official-style independent swept-segment hit geometry for one moving target,
 reward, done masks, and masked reset.  State and outputs remain on the selected
 device.
@@ -107,9 +108,17 @@ RocketPy-equivalent model**.  The table contains medians from three seeded
 repeats; the benchmark also prints each combination's minimum and maximum.
 
 `TensorFlightBatch` now supports device-side masked reset and protects state
-from non-finite policy actions.  It still has no official 29-element E2E
-observation builder, PPO rollout buffer/adapter, or canonical dynamics and
-reward parity, so it is not yet a drop-in trainable environment.
+from non-finite policy actions. Phase 1 adds an isolated historical 29-element
+E2E observation fixture and agent/oracle data contracts, but they are not yet
+wired into `TensorFlightBatch`. There is still no PPO rollout buffer/adapter or
+canonical dynamics and reward parity, so it is not a drop-in trainable
+environment.
+
+Launch is deliberately not part of the four-action controller. A
+`LaunchPlanner` owns only launch/inclination/heading, a post-launch bootstrap
+controller owns the historical climb, and a sensor-estimated handoff activates
+PPO. See [PHASE1.md](PHASE1.md) for the canonical trace schema, measured launch
+boundary, comparison report, and synchronous IPC baseline.
 
 `torch.compile(mode="reduce-overhead")` safely fell back to eager execution on
 this native Windows installation with `TritonMissing`.  A Linux/WSL2 run is a
@@ -136,6 +145,15 @@ Run the current subprocess baseline:
 
 ```powershell
 .venv\Scripts\python -m experiments.cuda.benchmark_cpu_parallel --steps 300 --workers 1,2,4,8,12,16,20
+```
+
+Record and compare a canonical Phase 1 trace, then run the synchronous
+rollout-collection baseline:
+
+```powershell
+.venv\Scripts\python -m experiments.cuda.canonical_oracle --case launch_control --output .artifacts\cuda\oracle\launch_control.npz
+.venv\Scripts\python -m experiments.cuda.compare_canonical_trace .artifacts\cuda\oracle\launch_control.npz --output .artifacts\cuda\oracle\launch_control_report.json
+.venv\Scripts\python -m experiments.cuda.benchmark_cpu_training_loop --workers 1,4,8,16,20 --steps 300 --warmup-steps 10 --repeats 3
 ```
 
 Run the isolated tensor benchmark and its tests:

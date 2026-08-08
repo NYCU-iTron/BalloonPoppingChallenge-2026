@@ -17,3 +17,6 @@ __pycache__
 .pytest_cache
 .coverage
 coverage.xml
+
+# Reproducible local benchmark/oracle outputs
+.artifacts/
