@@ -1,61 +1,18 @@
-import logging
 import numpy as np
 from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Selector:
-    # Launch gating for rising targets: hold the rocket on the pad until every
-    # balloon is airborne and the LOWEST one has climbed past this altitude
-    # above ground. The release sequence turns the balloons into a vertical
-    # column (~release_interval * climb_rate spacing) almost directly overhead;
-    # engaging that column from below with a pure climb is the vehicle's
-    # strength (T/W ~1.3 gives almost no lateral authority near the ground, so
-    # launching at a freshly released balloon at pad altitude is unwinnable).
-    LAUNCH_GATE_AGL = 100.0  # (m) hand-tuned engagement altitude
-
-    # Targeting (see select_target): candidates are scored by the lateral
-    # acceleration their intercept would demand from the current course.
-    MAX_LATERAL_ACCEL = 10.0  # (m/s^2) sustainable lateral authority at T/W ~1.3
-    SWITCH_HYSTERESIS = 1.5   # keep the current target until 1.5x over budget
-    MIN_CHAIN_SPEED = 5.0     # (m/s) below this, course-based scoring is undefined
-    MAX_TIME_TO_GO = 30.0     # (s) slower intercepts than this are irrelevant
-
-    def __init__(self, given_parameters):
-        self.logger = logging.getLogger(__name__)
-        self.given_parameters = given_parameters
-
-        env_cfg = given_parameters[Schema.Given.Section.ENVIRONMENT]
-        self.ground_elevation = float(env_cfg[Schema.Given.Environment.ELEVATION])
-        balloon_cfg = given_parameters[Schema.Given.Section.BALLOON]
-        self.balloon_radius = float(balloon_cfg[Schema.Given.Balloon.RADIUS])
-
-        self.current_target_idx = None
+    def __init__(self):
+       pass
 
     def reset(self):
         pass
 
     def should_launch(self, observation: dict) -> bool:
-        raw_balloons = np.asarray(observation["balloon_states"], dtype=float)
-
-        # If no targets
-        if raw_balloons.size == 0 or len(raw_balloons) == 0:
-            return True
-
-        status = np.asarray(observation["balloon_status"], dtype=int).reshape(-1)
-
-        # Wait out the release sequence: a balloon still on the ground would
-        # otherwise keep resetting the "lowest airborne" gate below.
-        airborne = status == 1
-        if (status == 0).any() or not airborne.any():
-            return False
-
-        # Static (or descending) targets cannot be waited out -- engage now.
-        # This keeps the immediate-launch behavior for the static scenarios.
-        if float(np.max(raw_balloons[airborne, 5])) <= 0.1:
-            return True
-
-        lowest_agl = float(np.min(raw_balloons[airborne, 2])) - self.ground_elevation
-        return lowest_agl >= self.LAUNCH_GATE_AGL
+        launch_time = 60
+        should_launch = observation[Schema.Observation.SIMULATION_TIME] >= launch_time
+        return should_launch
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """
@@ -63,94 +20,171 @@ class Selector:
         """
         return np.array([90.0, 0.0])
 
-    def select_target(self, balloon_states: np.ndarray, rocket_state: np.ndarray) -> int | None:
+    def select_targets(self, balloon_states: np.ndarray) -> list[int] | None:
         """
-        Reachability-aware target selection with forward chaining.
-
-        A low-T/W interceptor cannot turn back, so candidates are scored by the
-        lateral acceleration an intercept from the current course would demand
-        (zero-effort-miss guidance demand: a_req = 2*|ZEM| / t_go^2). Among the
-        affordable candidates the soonest intercept wins, which naturally chains
-        target-to-target up the rising balloon column after each pop. The
-        current target is kept (hysteresis) until it costs 1.5x the budget, so
-        the selection does not jitter between similar candidates.
-
         Parameters
         ----------
         balloon_states : np.ndarray
             Shape (N, 6) predicted states [x, y, z, vx, vy, vz]; NaN position
             marks inactive (unreleased or popped) balloons.
-        rocket_state : np.ndarray
-            Estimated state [pos(3), vel(3), acc(3), quat(4), gyro(3)].
 
         Returns
         -------
-        int or None
-            Index of the selected balloon, or None if no active targets remain.
+        list[int] | None
+            A list of 10 target balloon IDs ordered from T1 to T10,
+            or None if invalid.
         """
-        rocket_pos = rocket_state[0:3]
-        rocket_vel = rocket_state[3:6]
+        # --- 1. 權重與門檻參數設定 ---
+        dist_weight = 1.0  # 離主軸距離 (d_i) 的懲罰權重
+        angle_weight = 80.0  # 氣球之間轉向折角的懲罰權重
 
-        valid = ~np.isnan(balloon_states[:, 0:3]).any(axis=1)
-        if not valid.any():
-            self.current_target_idx = None
+        min_dist = 20.0  # 期望的兩氣球間最短距離 (單位: 公尺)
+        too_close_weight = 50.0  # 低於 min_dist 時的平方懲罰權重
+        max_dist = 100.0
+        too_far_weight = 5.0
+
+        # --- 2. 過濾 Valid 氣球 ---
+        valid_mask = ~np.isnan(balloon_states[:, 0])
+        valid_indices = np.where(valid_mask)[0]
+
+        K = 10  # 目標數量
+        if len(valid_indices) < K:
             return None
 
-        def _nearest_valid():
-            dists = np.linalg.norm(balloon_states[:, 0:3] - rocket_pos, axis=1)
-            dists[~valid] = np.inf
-            return int(np.argmin(dists))
+        positions = balloon_states[valid_indices, :3]
+        velocities = balloon_states[valid_indices, 3:]
 
-        # On the pad / just after liftoff there is no meaningful course yet.
-        # Under the launch gate the nearest balloon is the lowest of the column
-        # overhead -- exactly the right opening target.
-        if float(np.linalg.norm(rocket_vel)) < self.MIN_CHAIN_SPEED:
-            self.current_target_idx = _nearest_valid()
-            return self.current_target_idx
+        # --- 3. (r, z) 擬合斜率 + 速度對齊生成 3D 主軸向量 u ---
+        r = np.hypot(positions[:, 0], positions[:, 1])
+        z = positions[:, 2]
 
-        num = len(balloon_states)
-        a_req = np.full(num, np.inf)
-        t_go_all = np.full(num, np.inf)
-        for i in np.flatnonzero(valid):
-            rel = balloon_states[i, 0:3] - rocket_pos
-            dist = float(np.linalg.norm(rel))
-            if dist < 1e-6:
-                a_req[i] = 0.0
-                t_go_all[i] = 0.0
-                continue
-            v_rel = rocket_vel - balloon_states[i, 3:6]
-            v_close = float(np.dot(v_rel, rel)) / dist
-            if v_close <= 0.5:
-                continue  # receding or barely closing: not reachable ahead
-            t_go = dist / v_close
-            if t_go > self.MAX_TIME_TO_GO:
-                continue  # closing too slowly to matter this flight
-            zem = rel - v_rel * t_go  # miss vector if the course is held
-            # A pass within the balloon radius already pops it, so only the
-            # miss beyond the radius needs to be steered out.
-            miss = max(float(np.linalg.norm(zem)) - self.balloon_radius, 0.0)
-            a_req[i] = 2.0 * miss / (t_go * t_go)
-            t_go_all[i] = t_go
+        sum_r2 = np.sum(r**2)
+        slope = np.sum(r * z) / sum_r2 if sum_r2 > 1e-6 else 1.0
 
-        # Hysteresis: hold the current target while it stays affordable.
-        cur = self.current_target_idx
-        cur_alive = cur is not None and cur < num and valid[cur]
-        if cur_alive and a_req[cur] <= self.MAX_LATERAL_ACCEL * self.SWITCH_HYSTERESIS:
-            return cur
+        mean_vel_xy = np.mean(velocities[:, :2], axis=0)
+        vel_norm = np.linalg.norm(mean_vel_xy)
+        dir_xy = (
+            mean_vel_xy / vel_norm
+            if vel_norm > 1e-5
+            else np.array([1.0, 0.0])
+        )
 
-        feasible = a_req <= self.MAX_LATERAL_ACCEL
-        if feasible.any():
-            # Soonest affordable intercept -> chain forward along the course.
-            t_sel = np.where(feasible, t_go_all, np.inf)
-            self.current_target_idx = int(np.argmin(t_sel))
-        elif cur_alive:
-            # Nothing affordable: keep the current one; the training env's miss
-            # detector ends the episode if it keeps receding.
-            return cur
-        elif np.isfinite(a_req).any():
-            # No current target either: take the least-demanding candidate.
-            self.current_target_idx = int(np.argmin(a_req))
-        else:
-            self.current_target_idx = _nearest_valid()
+        main_axis = np.array([dir_xy[0], dir_xy[1], slope])
+        u = main_axis / np.linalg.norm(main_axis)
 
-        return self.current_target_idx
+        # --- 4. 計算投影高度 s 與垂直離軸距離 d，並按 s 排序 ---
+        s_vals = np.dot(positions, u)
+        valid_balloons = []
+
+        for idx, pos, s_val in zip(valid_indices, positions, s_vals):
+            if s_val > 0:  # 只考慮原點前方的氣球
+                d_val = np.linalg.norm(pos - s_val * u)
+                valid_balloons.append(
+                    {"id": int(idx), "pos": pos, "s": s_val, "d": d_val}
+                )
+
+        if len(valid_balloons) < K:
+            return None
+
+        # 依主軸進度 s 由低到高排序 (天然保證單向推進)
+        sorted_balloons = sorted(valid_balloons, key=lambda b: b["s"])
+        N = len(sorted_balloons)
+
+        # --- 5. DP 演算法實作 ---
+        dp = np.full((N, K + 1), float("inf"))
+        parent = np.full((N, K + 1), -1, dtype=int)
+        origin = np.array([0.0, 0.0, 0.0])
+
+        # Base Case: k = 1 (第一顆目標：不對原點算距離過近懲罰，只算離軸與發射夾角)
+        for i in range(N):
+            pos_i = sorted_balloons[i]["pos"]
+
+            dir_origin = pos_i - origin
+            norm_orig = np.linalg.norm(dir_origin)
+            cos_a = (
+                np.clip(np.dot(u, dir_origin) / norm_orig, -1.0, 1.0)
+                if norm_orig > 1e-5
+                else 1.0
+            )
+            init_angle = np.degrees(np.arccos(cos_a))
+
+            # Base Cost：只考慮離主軸距離與發射角
+            dp[i][1] = (
+                dist_weight * sorted_balloons[i]["d"]
+                + angle_weight * init_angle
+            )
+            parent[i][1] = -1
+
+        # DP State Transition: k = 2 -> K
+        for k in range(2, K + 1):
+            for i in range(N):
+                pos_i = sorted_balloons[i]["pos"]
+
+                for j in range(i):  # j < i 確保單向推進 (s_j < s_i)
+                    if dp[j][k - 1] == float("inf"):
+                        continue
+
+                    pos_j = sorted_balloons[j]["pos"]
+
+                    # 1) 【只在此處計算】兩顆氣球之間 (P_j -> P_i) 的距離與近距離懲罰
+                    segment_dist = np.linalg.norm(pos_i - pos_j)
+                    too_close_penalty = 0.0
+                    if segment_dist < min_dist:
+                        too_close_penalty = (
+                            min_dist - segment_dist
+                        ) ** 2 * too_close_weight
+
+                    too_far_penalty = 0.0
+                    if segment_dist > max_dist:
+                        too_far_penalty = (
+                            segment_dist - max_dist
+                        ) ** 2 * too_far_weight
+
+                    # 2) 計算兩氣球之間的轉向折角 (P_prev -> P_j 與 P_j -> P_i)
+                    prev_idx = parent[j][k - 1]
+                    prev_pos = (
+                        origin
+                        if prev_idx == -1
+                        else sorted_balloons[prev_idx]["pos"]
+                    )
+
+                    v1 = pos_j - prev_pos
+                    v2 = pos_i - pos_j
+
+                    n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+                    turn_angle = (
+                        np.degrees(
+                            np.arccos(
+                                np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+                            )
+                        )
+                        if (n1 > 1e-5 and n2 > 1e-5)
+                        else 0.0
+                    )
+
+                    # 總代價 = 前一步 Cost + 離軸懲罰 + 轉向角懲罰 + 兩氣球間過近懲罰
+                    cost = (
+                        dp[j][k - 1]
+                        + dist_weight * sorted_balloons[i]["d"]
+                        + angle_weight * turn_angle
+                        + too_close_penalty
+                        + too_far_penalty
+                    )
+
+                    if cost < dp[i][k]:
+                        dp[i][k] = cost
+                        parent[i][k] = j
+
+        # --- 6. 回溯找出最佳序列 (T1 -> T10) ---
+        best_last_idx = int(np.argmin(dp[:, K]))
+        if dp[best_last_idx, K] == float("inf"):
+            return None
+
+        curr = best_last_idx
+        target_ids = []
+        for k in range(K, 0, -1):
+            target_ids.append(sorted_balloons[curr]["id"])
+            curr = parent[curr][k]
+
+        target_ids.reverse()
+        return target_ids
