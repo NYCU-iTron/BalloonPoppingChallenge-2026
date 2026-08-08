@@ -1,4 +1,3 @@
-import logging
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
@@ -8,30 +7,7 @@ from BalloonPoppingGymEnv.agents.gnc.controller import Controller
 
 class ITronAgent(BaseAgent):
     def __init__(self, given_parameters):
-        """
-        Initializes the agent with environment and rocket configurations.
-
-        Parameters
-        ----------
-        given_parameters : dict
-            Nested configuration metadata structured as follows:
-                - environment:
-                    date : list[int] -> [year, month, day, hour]
-                    latitude / longitude / elevation : float -> [deg, deg, m]
-                - simulation:
-                    time_step / max_time : float -> [s, s]
-                - balloon:
-                    release_interval / num / radius / mass : [s, int, m, kg]
-                - rocket:
-                    tank : liquid, gas parameters and initial mass [kg, kg/s, m]
-                    motor : thrust_source [N], burn_time [s], and geometric specs
-                    rocket_body : structural mass [kg] and inertia [kg·m²]
-                    nose / fins : aerodynamic shapes and assembly positions [m]
-                    sensors : sampling_rate [Hz] and noise parameters
-                    control : gimbal_range [deg], max_roll_torque [Nm], limits
-        """
         super().__init__(given_parameters)
-        self.logger = logging.getLogger(__name__)
 
         # Initialize GNC components
         self.estimator = Estimator(given_parameters)
@@ -39,29 +15,57 @@ class ITronAgent(BaseAgent):
         self.navigator = Navigator(given_parameters)
         self.controller = Controller(given_parameters)
 
+        self.should_launch = False
+        self.launch_inclination_heading = None
+        self.target_idx_list = []
+        self.current_target_idx = 0
+
     def reset(self) -> None:
         self.estimator.reset()
         self.selector.reset()
         self.navigator.reset()
         self.controller.reset()
 
-    def get_action(self, observation: dict) -> dict:
-        rocket_state = self.estimator.estimate_rocket(observation)
-        balloon_states = self.estimator.predict_balloons(observation)
+        self.should_launch = False
+        self.launch_inclination_heading = None
+        self.target_idx_list = []
 
-        target_idx = self.selector.select_target(balloon_states, rocket_state)
-        target_state = self.estimator.predict_target(observation, target_idx)
+    def get_action(self, observation: dict) -> dict:
+        # Not launch
+        if not self.should_launch:
+            self.should_launch = self.selector.should_launch(observation)
+
+            # Still not launch
+            if not self.should_launch:
+                return {
+                    "launch": False,
+                    "launch_inclination_heading": [90.0, 0.0],
+                    "tvc": [0.0, 0.0],
+                    "roll": 0.0,
+                    "throttle": 0.0,
+                }
+
+            # Run only once after should_launch become true
+            self.launch_inclination_heading = self.selector.get_launch_heading(observation)
+            self.target_idx_list = self.selector.select_targets(observation)
+
+        rocket_state = self.estimator.estimate_rocket(observation)
+
+        balloon_idx = self.target_idx_list[self.current_target_idx]
+        is_target_popped = self.selector.check_target_popped(balloon_idx, observation)
+        if is_target_popped:
+            self.current_target_idx += 1
+            balloon_idx = self.target_idx_list[self.current_target_idx]
+
+        # target_state = self.selector.get_target_state(balloon_idx, observation)
+        target_state = self.estimator.predict_target(observation, balloon_idx)
 
         a_cmd, desired_throttle = self.navigator.compute(target_state, rocket_state)
         tvc, roll, throttle = self.controller.compute(rocket_state, a_cmd, desired_throttle)
 
-        # Set launch parameters
-        is_launched = self.selector.should_launch(observation)
-        launch_inclination_heading = self.selector.get_launch_heading(observation)
-
         return {
-            "launch": is_launched,
-            "launch_inclination_heading": launch_inclination_heading,
+            "launch": True,
+            "launch_inclination_heading": self.launch_inclination_heading,
             "tvc": tvc,
             "roll": roll,
             "throttle": throttle,
