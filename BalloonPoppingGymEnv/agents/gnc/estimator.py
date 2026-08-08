@@ -3,6 +3,40 @@ import numpy as np
 from collections import deque
 from BalloonPoppingGymEnv.utils.schema import Schema
 
+
+def launch_attitude_quaternion(inclination: float, heading: float) -> np.ndarray:
+    """
+    Body-to-world quaternion of a rocket sitting on the launch rail.
+
+    Follows the 3-1-3 Euler convention the simulator uses to place the rocket:
+    precession psi = -heading, nutation theta = inclination - 90, spin phi = 0.
+
+    Parameters
+    ----------
+    inclination : float
+        Rail inclination in degrees (90 = vertical).
+    heading : float
+        Rail heading in degrees.
+
+    Returns
+    -------
+    quat : np.ndarray
+        Shape (4,): [qw, qx, qy, qz].
+    """
+    theta = np.radians(inclination - 90.0)
+    psi = np.radians(-heading)
+
+    ctheta, stheta = np.cos(theta / 2.0), np.sin(theta / 2.0)
+    cpsi, spsi = np.cos(psi / 2.0), np.sin(psi / 2.0)
+
+    return np.array([
+        ctheta * cpsi,
+        stheta * cpsi,
+        stheta * spsi,
+        ctheta * spsi,
+    ])
+
+
 class Estimator:
     def __init__(self, given_parameters):
         self.logger = logging.getLogger(__name__)
@@ -12,8 +46,13 @@ class Estimator:
         self.sampling_rate = given_parameters[Schema.Given.Section.ROCKET][Schema.Given.Rocket.SENSORS][Schema.Given.Sensors.SAMPLING_RATE]
         self.dt = 1.0 / self.sampling_rate
 
+        # Launch pad position. Positions are altitude above sea level, so the pad
+        # sits at z = elevation -- this is where the rocket is until GNSS comes up.
+        elevation = given_parameters[Schema.Given.Section.ENVIRONMENT][Schema.Given.Environment.ELEVATION]
+        self.pad_pos = np.array([0.0, 0.0, float(elevation)])
+
         # Rocket state
-        self.rocket_pos = np.zeros(3)
+        self.rocket_pos = self.pad_pos.copy()
         self.rocket_vel = np.zeros(3)
         self.rocket_acc = np.zeros(3)
         self.rocket_quat = np.array([1.0, 0.0, 0.0, 0.0])
@@ -41,7 +80,7 @@ class Estimator:
         # Reset rocket state
         self.rocket_gyro = np.zeros(3)
         self.rocket_acc = np.zeros(3)
-        self.rocket_pos = np.zeros(3)
+        self.rocket_pos = self.pad_pos.copy()
         self.rocket_vel = np.zeros(3)
         self.rocket_quat = np.array([1.0, 0.0, 0.0, 0.0])
         self.rocket_state = np.concatenate([self.rocket_pos, self.rocket_vel, self.rocket_acc, self.rocket_quat, self.rocket_gyro])
@@ -49,6 +88,32 @@ class Estimator:
         # Reset target prediction state
         self.error_buffer.clear()
         self.tracks = {}
+
+    def set_launch_attitude(self, inclination_heading) -> None:
+        """
+        Seed the attitude integrator with the commanded launch attitude.
+
+        The gyro is only ever integrated relative to wherever the quaternion
+        starts, so this must be called with the same [inclination, heading]
+        handed to the environment. Starting from identity instead leaves the
+        world-to-body rotation offset by the launch heading for the entire
+        flight, which sends every lateral correction off by that angle.
+
+        Parameters
+        ----------
+        inclination_heading : array-like
+            [inclination, heading] in degrees, as sent in the launch action.
+        """
+        inclination = float(inclination_heading[0])
+        heading = float(inclination_heading[1])
+
+        self.rocket_quat = launch_attitude_quaternion(inclination, heading)
+        self.rocket_state = np.concatenate([self.rocket_pos, self.rocket_vel, self.rocket_acc, self.rocket_quat, self.rocket_gyro])
+
+        self.logger.info(
+            f"Launch attitude set: inclination={inclination:.2f} deg, "
+            f"heading={heading:.2f} deg, quat={self.rocket_quat}"
+        )
 
     def estimate_rocket(self, observation: dict) -> np.ndarray:
         """
@@ -103,6 +168,26 @@ class Estimator:
 
         self.rocket_state = np.concatenate([self.rocket_pos, self.rocket_vel, self.rocket_acc, self.rocket_quat, self.rocket_gyro])
         return self.rocket_state
+
+    def estimate_target(self, observation: dict, target_idx: int) -> np.ndarray:
+        """
+        Current state estimate of the selected target -- no lead applied.
+
+        Guidance owns the lead: the ZEM law extrapolates the target by its own
+        time-to-go. Handing it an already-extrapolated position (as
+        :meth:`predict_target` returns) leads the target twice, which at a drift
+        speed of a few m/s puts the aim point tens of metres past the balloon.
+
+        Returns
+        -------
+        target_state : np.ndarray
+            Shape (6,): [pos(3), vel(3)], or NaN when there is no target.
+        """
+        if target_idx is None:
+            return np.full(6, np.nan)
+
+        balloon_states = np.array(observation[Schema.Observation.BALLOON_STATES], dtype=float)
+        return balloon_states[target_idx][:6].copy()
 
     def predict_balloons(self, observation: dict) -> np.ndarray:
         balloon_status = np.array(observation[Schema.Observation.BALLOON_STATUS], dtype=int).flatten()

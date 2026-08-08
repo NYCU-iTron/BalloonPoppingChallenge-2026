@@ -4,7 +4,12 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 class Selector:
     def __init__(self, given_parameters):
-       pass
+        # Balloon and rocket positions are reported as altitude above sea level,
+        # so the launch pad sits at z = elevation, not at the coordinate origin.
+        elevation = given_parameters[Schema.Given.Section.ENVIRONMENT][
+            Schema.Given.Environment.ELEVATION
+        ]
+        self.pad_origin = np.array([0.0, 0.0, float(elevation)])
 
     def reset(self):
         pass
@@ -34,7 +39,10 @@ class Selector:
             else np.array([1.0, 0.0])
         )
 
-        heading_deg = np.degrees(np.arctan2(dir_xy[1], dir_xy[0]))
+        # The simulator's heading is a compass bearing (0 = North, 90 = East,
+        # clockwise), while dir_xy is an ENU vector -- so the East component
+        # goes first in the arctan2.
+        heading_deg = np.degrees(np.arctan2(dir_xy[0], dir_xy[1]))
         heading_deg = heading_deg % 360.0
 
         heading = np.array([90.0, heading_deg])
@@ -55,8 +63,8 @@ class Selector:
             or None if invalid.
         """
         # --- 1. 權重與門檻參數設定 ---
-        dist_weight = 1.0  # 離主軸距離 (d_i) 的懲罰權重
-        angle_weight = 80.0  # 氣球之間轉向折角的懲罰權重
+        dist_weight = 10.0  # 離主軸距離 (d_i) 的懲罰權重
+        angle_weight = 20.0  # 氣球之間轉向折角的懲罰權重
 
         min_dist = 20.0  # 期望的兩氣球間最短距離 (單位: 公尺)
         too_close_weight = 50.0  # 低於 min_dist 時的平方懲罰權重
@@ -67,11 +75,13 @@ class Selector:
         valid_mask = ~np.isnan(balloon_states[:, 0])
         valid_indices = np.where(valid_mask)[0]
 
-        K = 10  # 目標數量
+        K = 8  # 目標數量
         if len(valid_indices) < K:
             return None
 
-        positions = balloon_states[valid_indices, :3]
+        # 一律換算成「相對發射台」座標：主軸擬合、投影 s、離軸距離 d 與發射夾角
+        # 都應該以發射台為原點，而不是海平面。
+        positions = balloon_states[valid_indices, :3] - self.pad_origin
         velocities = balloon_states[valid_indices, 3:]
 
         # --- 3. (r, z) 擬合斜率 + 速度對齊生成 3D 主軸向量 u ---
@@ -113,7 +123,7 @@ class Selector:
         # --- 5. DP 演算法實作 ---
         dp = np.full((N, K + 1), float("inf"))
         parent = np.full((N, K + 1), -1, dtype=int)
-        origin = np.array([0.0, 0.0, 0.0])
+        origin = np.array([0.0, 0.0, 0.0])  # 發射台，因 positions 已是相對座標
 
         # Base Case: k = 1 (第一顆目標：不對原點算距離過近懲罰，只算離軸與發射夾角)
         for i in range(N):
