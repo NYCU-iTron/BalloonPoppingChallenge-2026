@@ -3,7 +3,7 @@ from BalloonPoppingGymEnv.agents.gnc.estimator import Estimator
 from BalloonPoppingGymEnv.agents.gnc.selector import Selector
 from BalloonPoppingGymEnv.agents.gnc.navigator import Navigator
 from BalloonPoppingGymEnv.agents.gnc.controller import Controller
-
+from BalloonPoppingGymEnv.utils.schema import Schema
 
 class ITronAgent(BaseAgent):
     def __init__(self, given_parameters):
@@ -47,7 +47,9 @@ class ITronAgent(BaseAgent):
 
             # Run only once after should_launch become true
             self.launch_inclination_heading = self.selector.get_launch_heading(observation)
-            self.target_idx_list = self.selector.select_targets(observation)
+            self.estimator.set_launch_attitude(self.launch_inclination_heading)
+            balloon_states = observation[Schema.Observation.BALLOON_STATES]
+            self.target_idx_list = self.selector.select_targets(balloon_states)
 
         rocket_state = self.estimator.estimate_rocket(observation)
 

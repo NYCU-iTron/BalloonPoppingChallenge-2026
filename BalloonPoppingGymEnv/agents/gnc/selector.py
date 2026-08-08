@@ -40,7 +40,7 @@ class Selector:
         heading = np.array([90.0, heading_deg])
         return heading
 
-    def select_targets(self, observation: dict) -> list[int] | None:
+    def select_targets(self, balloon_states: np.ndarray) -> list[int] | None:
         """
         Parameters
         ----------
@@ -54,8 +54,6 @@ class Selector:
             A list of 10 target balloon IDs ordered from T1 to T10,
             or None if invalid.
         """
-        balloon_states = observation[Schema.Observation.BALLOON_STATES]
-
         # --- 1. 權重與門檻參數設定 ---
         dist_weight = 1.0  # 離主軸距離 (d_i) 的懲罰權重
         angle_weight = 80.0  # 氣球之間轉向折角的懲罰權重
