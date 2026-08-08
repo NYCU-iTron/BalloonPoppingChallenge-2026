@@ -167,7 +167,7 @@ def plot_balloons_3d(balloon_states, eval_time, seed, target_ids):
 
 
 def main():
-    scenario_parameters, _ = load_pool_parameters()
+    scenario_parameters, given_parameters = load_pool_parameters()
     simulation = scenario_parameters["simulation"]
     balloon = scenario_parameters["balloon"]
 
@@ -182,7 +182,7 @@ def main():
     )
 
     # 1. 實例化 Selector 並選擇目標
-    selector = Selector()
+    selector = Selector(given_parameters)
     target_ids = selector.select_targets(balloon_states)
 
     if target_ids is not None:

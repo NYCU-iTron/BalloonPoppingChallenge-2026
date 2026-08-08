@@ -237,7 +237,7 @@ def animate_targets_3d(
 
 
 def main():
-    scenario_parameters, _ = load_pool_parameters()
+    scenario_parameters, given_parameters = load_pool_parameters()
     simulation = scenario_parameters["simulation"]
     balloon = scenario_parameters["balloon"]
 
@@ -259,7 +259,7 @@ def main():
     # 2. 在 t = T_SELECT 時獲取氣球狀態並執行 Selector 鎖定 10 顆目標
     select_states = get_balloon_states_at_time(sampled_pool, release_steps, T_SELECT, time_step)
 
-    selector = Selector()
+    selector = Selector(given_parameters)
     target_ids = selector.select_targets(select_states)
 
     if target_ids is None:
