@@ -3,24 +3,44 @@ from BalloonPoppingGymEnv.utils.schema import Schema
 
 
 class Selector:
-    def __init__(self):
+    def __init__(self, given_parameters):
        pass
 
     def reset(self):
         pass
 
     def should_launch(self, observation: dict) -> bool:
-        launch_time = 60
+        launch_time = 70
         should_launch = observation[Schema.Observation.SIMULATION_TIME] >= launch_time
         return should_launch
 
     def get_launch_heading(self, observation: dict) -> np.ndarray:
         """
-        Returns [inclination, heading] in degrees based on balloon positions.
+        Returns
+        -------
+        heading: np.ndarray
+            [inclination, heading] in degrees based on balloon positions.
         """
-        return np.array([90.0, 0.0])
+        balloon_states = np.array(observation[Schema.Observation.BALLOON_STATES], dtype=float)
+        valid_mask = ~np.isnan(balloon_states[:, 0])
+        valid_indices = np.where(valid_mask)[0]
+        velocities = balloon_states[valid_indices, 3:]
 
-    def select_targets(self, balloon_states: np.ndarray) -> list[int] | None:
+        mean_vel_xy = np.mean(velocities[:, :2], axis=0)
+        vel_norm = np.linalg.norm(mean_vel_xy)
+        dir_xy = (
+            mean_vel_xy / vel_norm
+            if vel_norm > 1e-5
+            else np.array([1.0, 0.0])
+        )
+
+        heading_deg = np.degrees(np.arctan2(dir_xy[1], dir_xy[0]))
+        heading_deg = heading_deg % 360.0
+
+        heading = np.array([90.0, heading_deg])
+        return heading
+
+    def select_targets(self, observation: dict) -> list[int] | None:
         """
         Parameters
         ----------
@@ -34,6 +54,8 @@ class Selector:
             A list of 10 target balloon IDs ordered from T1 to T10,
             or None if invalid.
         """
+        balloon_states = observation[Schema.Observation.BALLOON_STATES]
+
         # --- 1. 權重與門檻參數設定 ---
         dist_weight = 1.0  # 離主軸距離 (d_i) 的懲罰權重
         angle_weight = 80.0  # 氣球之間轉向折角的懲罰權重
@@ -188,3 +210,14 @@ class Selector:
 
         target_ids.reverse()
         return target_ids
+
+    def check_target_popped(self, target_idx: int, observation: dict) -> bool:
+        balloon_status = np.array(observation[Schema.Observation.BALLOON_STATUS], dtype=int).flatten()
+        target_status = balloon_status[target_idx]
+        return target_status == 2
+
+    def get_target_state(self, target_idx: int, observation: dict) -> np.ndarray:
+        balloon_states = observation[Schema.Observation.BALLOON_STATES]
+        target_state = balloon_states[target_idx]
+        return target_state
+
