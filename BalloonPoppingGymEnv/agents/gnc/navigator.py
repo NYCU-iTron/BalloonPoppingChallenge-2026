@@ -61,6 +61,18 @@ class Navigator:
             given_parameters[Schema.Given.Section.BALLOON][Schema.Given.Balloon.RADIUS]
         )
 
+        # Corners shed about 9 m/s that the next leg then rebuilds from
+        # nothing, and the turn geometry alone would permit 54 m/s and up -- so
+        # the loss looks like guidance rather than physics, and easing off the
+        # aim once the predicted miss is inside the balloon looks free. It is
+        # not. Tried as a hard switch and as a continuous blend, both scored
+        # 4.04 against 4.38, worse on 8 of 24 seeds and better on none.
+        #
+        # The bound was measuring the wrong thing: it asks what speed the corner
+        # could hold if all the lateral authority went into turning, but the
+        # rocket has to aim as well, and aiming is what spends it. The speed
+        # given up in a corner is not waste, it is the price of the hit.
+
         # A cruise ceiling on top of that. The range-proportional cap alone only
         # bites in the last second, by which point shedding the speed would need
         # far more deceleration than the vehicle owns; holding the run-in near
@@ -75,6 +87,7 @@ class Navigator:
         self.saturated = False
         self.braking = False
         self.tilt_limited = False
+        self.preserving_speed = False
 
     def reset(self):
         self.t_go = None
@@ -82,6 +95,7 @@ class Navigator:
         self.saturated = False
         self.braking = False
         self.tilt_limited = False
+        self.preserving_speed = False
 
     # ------------------------------------------------------------------ #
     # Launch
@@ -224,6 +238,7 @@ class Navigator:
             return None, None
 
         thrust_dir = a_thrust / thrust_norm
+        self._last_thrust_dir = thrust_dir
 
         # --- Throttle: the magnitude of the same vector ---------------------
         # Never a separate heuristic. Throttling also saves no propellant here,

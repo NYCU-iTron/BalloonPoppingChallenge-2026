@@ -26,10 +26,19 @@ class ITronAgent(BaseAgent):
         self.navigator = Navigator(given_parameters)
         self.controller = Controller(given_parameters)
 
-        # Rebuilding the chain after every hit measures worse than flying the
-        # launch plan through: the search from a mid-plume origin keeps coming
-        # back with one or two targets where the original chain had four.
-        # Kept behind a switch because the diagnosis is not finished.
+        # Rebuilding the chain after every hit measures worse, and retesting it
+        # on the beam search -- which has none of the axis search's filtering
+        # that first explained the loss -- gave the same answer: 3.92 against
+        # 4.29, worse on 8 of 24 seeds and better on none.
+        #
+        # It does what it was meant to: misses beyond 5 m fall from 14 to 2,
+        # because replanning drops a last target it can now see is out of reach.
+        # That turns out to be the whole problem. A miss at the end of the chain
+        # is free -- the burn left over has no other use -- so giving up on one
+        # only forfeits the times it would have connected. Over-planning costs
+        # nothing and under-planning costs balloons, which is also why every
+        # attempt to make the planner more ambitious came out exactly neutral:
+        # the current setting already sits on that boundary.
         self.replan_after_hit = False
 
         self.should_launch = False
@@ -66,7 +75,7 @@ class ITronAgent(BaseAgent):
             balloon_states = self.selector.active_states(observation)
             self.target_idx_list = (
                 self.selector.pending_targets
-                or self.selector.select_targets(balloon_states)
+                or self.selector.plan_chain(balloon_states)
             )
 
             # No feasible target set: stay on the pad rather than launching blind.
@@ -143,7 +152,7 @@ class ITronAgent(BaseAgent):
         rocket_vel = rocket_state[3:6]
         speed = float(np.linalg.norm(rocket_vel))
 
-        chain = self.selector.select_targets(
+        chain = self.selector.plan_chain(
             self.selector.active_states(observation),
             origin=rocket_state[0:3],
             incoming_dir=rocket_vel / speed if speed > 1.0 else None,
@@ -175,7 +184,7 @@ class ITronAgent(BaseAgent):
         tail_states[:, :3] += tail_states[:, 3:6] * arrival_time
         tail_states[committed] = np.nan
 
-        tail = self.selector.select_targets(
+        tail = self.selector.plan_chain(
             tail_states,
             origin=arrival_pos,
             incoming_dir=arrival_dir,

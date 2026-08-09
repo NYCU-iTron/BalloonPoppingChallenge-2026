@@ -20,6 +20,34 @@ class Selector:
         self.time_budget_fraction = 0.95
         self.time_weight = 5.0  # cost per second, to prefer quicker chains
 
+        # --- Chain cost weights -------------------------------------------
+        # Lateral manoeuvring is the scarce resource: thrust already sits about
+        # 59 degrees off the velocity vector just holding the vehicle up, and
+        # 43% of guidance steps run against the acceleration limit. Distance off
+        # the plume axis is what costs lateral authority, so it is priced here
+        # rather than buried in the method body where it could not be swept.
+        self.dist_weight = 10.0        # off-axis distance from the plume axis
+        self.angle_weight = 20.0       # turn between consecutive legs, per degree
+        self.min_segment_dist = 20.0   # (m) balloons closer than this crowd each other
+        self.too_close_weight = 50.0
+        self.max_segment_dist = 100.0  # (m) beyond this a leg is a long haul
+        self.too_far_weight = 5.0
+
+        # Beam search over the rocket's own state, as an alternative to the
+        # axis-ordered DP. Width is generous because the branching factor is the
+        # whole balloon field and a good chain can start with a mediocre leg;
+        # 96 measured a shade better than 32 (4.29 against 4.25) and wider is
+        # affordable at ~340 ms a plan.
+        #
+        # `angle_weight` above turned out to be inert here: 5, 10 and 20 give
+        # bit-identical results across 24 seeds, because the turn is already
+        # priced through the time it costs -- entry speed falls with cos(turn)
+        # and time_weight multiplies the resulting leg time. Only 40 moved the
+        # answer, and it moved it down.
+        self.beam_width = 96
+        self.max_chain_length = 8
+        self.use_beam_search = True
+
         # --- Launch timing ------------------------------------------------
         # Every second spent waiting puts the nearest balloon further downwind,
         # and reaching the first target is the single largest item in the burn
@@ -87,7 +115,7 @@ class Selector:
             return False
         self._last_launch_evaluation = simulation_time
 
-        targets = self.select_targets(self.active_states(observation))
+        targets = self.plan_chain(self.active_states(observation))
         if not targets:
             return False
 
@@ -213,6 +241,130 @@ class Selector:
 
         return leg_time, rocket_pos + leg, direction
 
+    def select_targets_beam(
+        self,
+        balloon_states: np.ndarray,
+        origin: np.ndarray | None = None,
+        incoming_dir: np.ndarray | None = None,
+        time_budget: float | None = None,
+        t_since_launch: float = 0.0,
+    ) -> list[int] | None:
+        """Chain search carried out in the rocket's own frame, with no plume axis.
+
+        The axis-based search sorts balloons along a fitted plume direction and
+        only ever moves forwards along it. That buys a directed graph to run a
+        DP over, but it is a computational convenience rather than a physical
+        constraint, and two of the three things it was doing turned out to be
+        harmful: the off-axis penalty measured monotonically worse as it was
+        raised, and the "ahead of the origin" filter is what left mid-flight
+        replans with nothing to plan.
+
+        What actually constrains the vehicle is its velocity. Speed is won
+        almost entirely on the first, steep leg and merely carried afterwards,
+        and turning is what scrubs it off -- so the state that matters when
+        choosing the next balloon is where the rocket is, how fast, and which
+        way it is pointing. This searches over exactly that, and prices each
+        turn against the heading the rocket will really hold rather than
+        against a direction inferred from the previous chain entry.
+
+        Acyclicity comes for free: every leg costs time and the budget only
+        shrinks, so no chain can revisit a balloon.
+        """
+        if time_budget is None:
+            time_budget = self.vehicle.burn_time * self.time_budget_fraction
+
+        chain_origin = self.pad_origin if origin is None else np.asarray(origin, dtype=float)
+
+        valid = np.where(~np.isnan(balloon_states[:, 0]))[0]
+        if valid.size == 0:
+            return None
+
+        candidates = [
+            {
+                "id": int(i),
+                "pos": balloon_states[i, :3] - chain_origin,
+                "vel": balloon_states[i, 3:6],
+            }
+            for i in valid
+        ]
+
+        # A beam entry: cumulative cost, elapsed, position, heading, chain.
+        start_dir = None if incoming_dir is None else np.asarray(incoming_dir, dtype=float)
+        beam = [(0.0, 0.0, np.zeros(3), start_dir, ())]
+        best_chain: tuple[int, ...] = ()
+        best_cost = float("inf")
+
+        for _ in range(self.max_chain_length):
+            expanded = []
+            for cost, elapsed, position, direction, chain in beam:
+                for candidate in candidates:
+                    if candidate["id"] in chain:
+                        continue
+
+                    leg, length, leg_time = self._predict_leg(
+                        candidate, position, elapsed, t_since_launch, 0.0
+                    )
+                    if length < 1e-6:
+                        continue
+
+                    leg_dir = leg / length
+                    turn = (
+                        0.0 if direction is None
+                        else float(np.arccos(np.clip(np.dot(direction, leg_dir), -1.0, 1.0)))
+                    )
+                    if turn > 0.0:
+                        leg_time = self.vehicle.transit_time(
+                            length, turn, elapsed + t_since_launch, float(leg_dir[2])
+                        )
+
+                    finish = elapsed + leg_time
+                    if finish > time_budget:
+                        continue
+
+                    penalty = 0.0
+                    if length < self.min_segment_dist:
+                        penalty += (self.min_segment_dist - length) ** 2 * self.too_close_weight
+                    if length > self.max_segment_dist:
+                        penalty += (length - self.max_segment_dist) ** 2 * self.too_far_weight
+
+                    expanded.append((
+                        cost
+                        + self.time_weight * leg_time
+                        + self.angle_weight * np.degrees(turn)
+                        + penalty,
+                        finish,
+                        position + leg,
+                        leg_dir,
+                        chain + (candidate["id"],),
+                    ))
+
+            if not expanded:
+                break
+
+            # Deeper always beats cheaper: the score is balloons, not elapsed.
+            expanded.sort(key=lambda e: e[0])
+            beam = expanded[: self.beam_width]
+
+            if len(beam[0][4]) > len(best_chain) or (
+                len(beam[0][4]) == len(best_chain) and beam[0][0] < best_cost
+            ):
+                best_chain, best_cost = beam[0][4], beam[0][0]
+
+        if not best_chain:
+            return None
+
+        self.logger.info(
+            f"Beam chain of {len(best_chain)} within a {time_budget:.1f} s budget: "
+            f"{list(best_chain)}"
+        )
+        return list(best_chain)
+
+    def plan_chain(self, balloon_states: np.ndarray, **kwargs) -> list[int] | None:
+        """Whichever chain search is configured."""
+        if self.use_beam_search:
+            return self.select_targets_beam(balloon_states, **kwargs)
+        return self.select_targets(balloon_states, **kwargs)
+
     def remaining_budget(self, t_since_launch: float) -> float:
         """Burn time left to spend on a chain, in seconds."""
         return max(
@@ -226,6 +378,7 @@ class Selector:
         incoming_dir: np.ndarray | None = None,
         time_budget: float | None = None,
         t_since_launch: float = 0.0,
+        reverse_order: bool = False,
     ) -> list[int] | None:
         """
         Parameters
@@ -244,6 +397,17 @@ class Selector:
             Seconds of burn the chain may use. The whole burn by default.
         t_since_launch : float
             Where the vehicle already is on its mass and thrust curve.
+        reverse_order : bool
+            Work the plume from its downwind end back towards the pad instead of
+            outwards from it. Legs then run against the drift, so balloons close
+            on the rocket rather than running from it.
+
+            Measured worse at every launch time from t=10 to t=40, by 0.67 to
+            1.17 targets, and measured worse again after drift was modelled --
+            drift being the whole reason to expect it to win. The pad sits at
+            the upwind end, so the rocket has to cross the entire plume before
+            it can start working back, and that crossing costs more than meeting
+            the balloons head-on saves.
 
         Returns
         -------
@@ -252,13 +416,13 @@ class Selector:
             reachable.
         """
         # --- 1. 權重與門檻參數設定 ---
-        dist_weight = 10.0  # 離主軸距離 (d_i) 的懲罰權重
-        angle_weight = 20.0  # 氣球之間轉向折角的懲罰權重
+        dist_weight = self.dist_weight
+        angle_weight = self.angle_weight
 
-        min_dist = 20.0  # 期望的兩氣球間最短距離 (單位: 公尺)
-        too_close_weight = 50.0  # 低於 min_dist 時的平方懲罰權重
-        max_dist = 100.0
-        too_far_weight = 5.0
+        min_dist = self.min_segment_dist
+        too_close_weight = self.too_close_weight
+        max_dist = self.max_segment_dist
+        too_far_weight = self.too_far_weight
 
         # --- 2. 過濾 Valid 氣球 ---
         valid_mask = ~np.isnan(balloon_states[:, 0])
@@ -323,7 +487,9 @@ class Selector:
         K = min(max_chain, len(valid_balloons))
 
         # 依主軸進度 s 由低到高排序 (天然保證單向推進)
-        sorted_balloons = sorted(valid_balloons, key=lambda b: b["s"])
+        sorted_balloons = sorted(
+            valid_balloons, key=lambda b: b["s"], reverse=reverse_order
+        )
         N = len(sorted_balloons)
 
         # --- 5. DP 演算法實作 ---

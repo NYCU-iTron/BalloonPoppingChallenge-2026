@@ -86,6 +86,25 @@ class Vehicle:
         # where the same score comes with less than half the spread.
         self.cruise_speed = 15.0          # (m/s) ceiling on closing speed
 
+        # What the rocket actually flies at, which is not the same thing. The
+        # ceiling above is a guidance decision about how fast to arrive; this is
+        # a measurement of the cruise the vehicle settles into, and it is what
+        # the planner has to budget with. Logged over 22 legs: legs are entered
+        # and left at 20-25 m/s, because along-track acceleration averages
+        # +0.05 m/s^2 -- thrust sits 59 degrees off the velocity vector holding
+        # the vehicle up, so essentially all the speed is won during the first,
+        # steep leg and merely carried thereafter.
+        #
+        # These two were one number until now, and separating them was supposed
+        # to explain why sweeping it changed nothing. It did not: planning at the
+        # measured 22 m/s lengthened the chain from 5.0 to 5.9 targets and cut
+        # completion from 83% to 70%, for 4.12 balloons against 4.17. That is the
+        # fourth independent way of making the planner more ambitious that has
+        # come out exactly neutral, so the score does not appear to be limited by
+        # the plan at all. Left at the conservative value, which buys the same
+        # score with a chain the vehicle finishes.
+        self.planning_speed = 15.0        # (m/s) speed the planner budgets with
+
         # Speed carried out of a balloon and into the next leg. Flying straight
         # through keeps it; a sharp corner scrubs it off and the rocket has to
         # build the whole leg's speed again from nothing, which is what makes a
@@ -198,18 +217,30 @@ class Vehicle:
             np.clip(max_accel - GRAVITY * climb_sin, self.min_transit_accel, max(max_accel, self.min_transit_accel))
         )
 
-        # Speed carried through the corner into this leg: full cruise straight
-        # ahead, nothing at all round a right angle.
+        # Speed carried through the corner into this leg. A turn is an arc of
+        # radius v^2 / a_lat, so the leg has to be long enough to contain it:
+        # holding v through a turn of `turn_angle` needs v^2 * turn / a_lat
+        # metres of it. Inverting that gives the fastest corner this leg can
+        # take. The previous cos(turn) rule was a guess and got the important
+        # case backwards -- it said a right-angle turn always costs all the
+        # speed, when a right angle spread over a long leg costs almost none,
+        # and long legs with big turns are exactly what the rocket needs when it
+        # runs out of balloon field and has to come back.
+        corner_speed = self.planning_speed
+        if turn_angle > 1e-6:
+            lateral = max(self.max_lateral_accel(t_elapsed), self.min_transit_accel)
+            corner_speed = float(np.sqrt(lateral * length / abs(turn_angle)))
+
         entry_speed = float(
             np.clip(
-                self.cruise_speed * self.corner_speed_retention * np.cos(turn_angle),
+                min(self.planning_speed, corner_speed) * self.corner_speed_retention,
                 0.0,
-                self.cruise_speed,
+                self.planning_speed,
             )
         )
 
         # Accelerate from there back up to cruise, then hold.
-        time_to_cruise = (self.cruise_speed - entry_speed) / closing_accel
+        time_to_cruise = (self.planning_speed - entry_speed) / closing_accel
         distance_to_cruise = (
             entry_speed * time_to_cruise + 0.5 * closing_accel * time_to_cruise**2
         )
@@ -219,7 +250,7 @@ class Vehicle:
                 -entry_speed + np.sqrt(entry_speed**2 + 2.0 * closing_accel * length)
             ) / closing_accel
         else:
-            travel = time_to_cruise + (length - distance_to_cruise) / self.cruise_speed
+            travel = time_to_cruise + (length - distance_to_cruise) / self.planning_speed
 
         return float(
             travel + self.turn_time_per_radian * abs(turn_angle) + self.terminal_time
