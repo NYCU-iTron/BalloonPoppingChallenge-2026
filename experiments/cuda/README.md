@@ -120,6 +120,14 @@ controller owns the historical climb, and a sensor-estimated handoff activates
 PPO. See [PHASE1.md](PHASE1.md) for the canonical trace schema, measured launch
 boundary, comparison report, and synchronous IPC baseline.
 
+Phase 2 now adds a separate float64 `Scenario1TensorRocket` that ports the
+official generalized 6-DoF RHS, matches Scenario 1 actuator saturation/rate
+limits, and compares RK4 1/2/4 with a Dormand--Prince reference. It also makes
+the official RK45 stale-FSAL behavior at control discontinuities explicit.
+This exact rocket model is not yet wired into the simplified
+`TensorFlightBatch`; see [PHASE2.md](PHASE2.md) for fidelity gates, measured
+errors, and the SciML/Diffrax design study.
+
 `torch.compile(mode="reduce-overhead")` safely fell back to eager execution on
 this native Windows installation with `TritonMissing`.  A Linux/WSL2 run is a
 separate experiment and may move the crossover through kernel fusion and CUDA
@@ -164,6 +172,13 @@ Run the isolated tensor benchmark and its tests:
 .venv\Scripts\python -m pytest tests/test_tensor_flight_cuda_experiment.py -q
 ```
 
+Run the Phase 2 rocket fidelity gates and generate the formal report:
+
+```powershell
+.venv\Scripts\python -m pytest tests/test_cuda_phase2_fidelity.py -q
+.venv\Scripts\python -m experiments.cuda.phase2_oracle --steps 256 --seed 2031 --output .artifacts\cuda\phase2\report_seed2031.json
+```
+
 ## Recommended implementation path
 
 1. Keep the official ActiveRocketPy environment as the scoring oracle.  For
@@ -199,6 +214,8 @@ RocketPy rewrite.
 - [MATLAB `ode45` extended capabilities](https://www.mathworks.com/help/matlab/ref/ode45.html)
 - [MATLAB `dlode45` GPU arrays](https://www.mathworks.com/help/deeplearning/ref/dlarray.dlode45.html)
 - [SciML: the two forms of GPU ODE acceleration](https://docs.sciml.ai/DiffEqGPU/stable/getting_started/)
+- [SciML ensemble simulations](https://docs.sciml.ai/DiffEqDocs/stable/features/ensemble/)
+- [Diffrax solver interface](https://docs.kidger.site/diffrax/api/solvers/abstract_solvers/)
 - [`torchode`: batch-parallel ODE solver](https://torchode.readthedocs.io/en/latest/)
 - [Stable-Baselines3 PPO CPU guidance](https://stable-baselines3.readthedocs.io/en/master/modules/ppo.html)
 - [PyTorch `torch.compile`](https://docs.pytorch.org/docs/stable/generated/torch.compile)

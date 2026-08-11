@@ -136,15 +136,10 @@ hard-code that count.
   --workers 1,4,8,16,20 --steps 300 --warmup-steps 10 --repeats 3
 ```
 
-## Phase 0 organizer question
+## Phase 0 organizer decision
 
-The research itself can continue, but substantial Phase 2/3 investment should
-wait for an affirmative answer or an explicit decision to accept the rules
-risk.  Suggested message:
-
-> 請問參賽隊伍是否可以在訓練階段使用自行開發的 GPU-vectorized surrogate
-> simulator？正式評測時我們仍會使用未修改的官方 simulator，agent 僅使用官方
-> observations 與 given parameters，且 qualification/final 提交內容會包含完整
-> agent 與 training source code。請問這樣是否符合競賽規則？
-
-No message is sent automatically by these tools.
+The team reports that the organizer approved training with a custom
+GPU-vectorized surrogate, provided evaluation continues to use the unmodified
+official simulator and the submitted agent consumes only allowed observations
+and given parameters. Phase 0 is therefore closed; the technical fidelity and
+transfer gates remain mandatory.
