@@ -10,9 +10,10 @@ tensor batch of independent flights.  Among the sampled batch sizes on the
 tested Windows machine, eager CUDA did not overtake tensorized CPU execution
 until batch 4,096.
 
-The tensor model here is explicitly a **non-canonical throughput surrogate**.
-It is not yet numerically equivalent to ActiveRocketPy and must not be used to
-claim competition performance.
+The official simulator remains canonical. Phase 3 now provides a validated
+competition-specific training surrogate for Scenario 1, but its policies must
+still pass holdout transfer in the unmodified official simulator before any
+competition-performance claim.
 
 ## Why one balloon still runs on the CPU
 
@@ -120,13 +121,17 @@ controller owns the historical climb, and a sensor-estimated handoff activates
 PPO. See [PHASE1.md](PHASE1.md) for the canonical trace schema, measured launch
 boundary, comparison report, and synchronous IPC baseline.
 
-Phase 2 now adds a separate float64 `Scenario1TensorRocket` that ports the
+Phase 2 adds a separate float64 `Scenario1TensorRocket` that ports the
 official generalized 6-DoF RHS, matches Scenario 1 actuator saturation/rate
 limits, and compares RK4 1/2/4 with a Dormand--Prince reference. It also makes
 the official RK45 stale-FSAL behavior at control discontinuities explicit.
-This exact rocket model is not yet wired into the simplified
-`TensorFlightBatch`; see [PHASE2.md](PHASE2.md) for fidelity gates, measured
-errors, and the SciML/Diffrax design study.
+Phase 3 wires that exact rocket into an online 100-balloon environment with
+official-shaped observations, stochastic reset, gust/sensor/actuator hooks,
+swept pops, rewards, and canonical impact lifecycle. A 4,096-environment
+float32 run reached 88,523 transitions/s, 3.49x the matching tensor CPU
+baseline, while its combined closest-distance p99 error was 0.0125 m. See
+[PHASE2.md](PHASE2.md) for rocket parity and [PHASE3.md](PHASE3.md) for the
+balloon, dtype, transfer, and throughput gates.
 
 `torch.compile(mode="reduce-overhead")` safely fell back to eager execution on
 this native Windows installation with `TritonMissing`.  A Linux/WSL2 run is a
@@ -177,6 +182,14 @@ Run the Phase 2 rocket fidelity gates and generate the formal report:
 ```powershell
 .venv\Scripts\python -m pytest tests/test_cuda_phase2_fidelity.py -q
 .venv\Scripts\python -m experiments.cuda.phase2_oracle --steps 256 --seed 2031 --output .artifacts\cuda\phase2\report_seed2031.json
+```
+
+Run the Phase 3 online-world gates and formal reports:
+
+```powershell
+.venv\Scripts\python -m pytest tests\test_cuda_phase3_environment.py -q
+.venv\Scripts\python -m experiments.cuda.phase3_oracle --seed 2071 --num-balloons 100 --dtype float32 --output .artifacts\cuda\phase3\balloons_seed2071_n100_f32.json
+.venv\Scripts\python -m experiments.cuda.benchmark_phase3 --batch-sizes 4096 --steps 8 --warmup-steps 3 --repeats 3 --output .artifacts\cuda\phase3\throughput_seed2081_b4096.json
 ```
 
 ## Recommended implementation path

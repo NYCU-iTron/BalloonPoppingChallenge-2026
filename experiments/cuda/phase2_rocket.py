@@ -12,12 +12,13 @@ It is not a general RocketPy replacement.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import torch
 
 
 Tensor = torch.Tensor
+WindProvider = Callable[[Tensor], Tensor]
 
 ACTUATOR_ORDER = ("roll", "tvc_x", "tvc_y", "throttle")
 STATE_SIZE = 13
@@ -186,9 +187,11 @@ class Scenario1TensorRocket:
         *,
         device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float64,
+        wind_provider: WindProvider | None = None,
     ) -> None:
         self.device = torch.device(device)
         self.dtype = dtype
+        self.wind_provider = wind_provider
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("rocket model supports float32 or float64")
 
@@ -504,6 +507,9 @@ class Scenario1TensorRocket:
             dim=-1,
         )
         wind = torch.stack((wind_x, wind_y), dim=-1)
+        if self.wind_provider is not None:
+            wind = wind + self.wind_provider(position[..., 2])
+            wind_x, wind_y = wind.unbind(-1)
 
         transformation = self._transformation(quaternion)
         transformation_t = transformation.transpose(-1, -2)
@@ -573,6 +579,10 @@ class Scenario1TensorRocket:
             component_wind_y = self.atmosphere_tables["wind_velocity_y"](
                 component_altitude
             )
+            if self.wind_provider is not None:
+                component_gust = self.wind_provider(component_altitude)
+                component_wind_x = component_wind_x + component_gust[..., 0]
+                component_wind_y = component_wind_y + component_gust[..., 1]
             component_wind_world = torch.stack(
                 (component_wind_x, component_wind_y, zero),
                 dim=-1,
