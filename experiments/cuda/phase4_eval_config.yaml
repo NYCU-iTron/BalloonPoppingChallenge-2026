@@ -1,0 +1,11 @@
+# Local official-evaluator template for a Phase 4 deployment export.
+scenario_number: 1
+render_mode: null
+agent_module_path: "./BalloonPoppingGymEnv/agents/numpy_tensorflight_agent.py"
+agent_class_name: "NumpyTensorFlightAgent"
+agent_name: "TensorFlight NumPy deployment"
+agent_kwargs:
+  artifact_path: ".artifacts/cuda/phase4/deployment.npz"
+team_name: local_phase4_test
+team_secret: local_only
+leaderboard_submission: false

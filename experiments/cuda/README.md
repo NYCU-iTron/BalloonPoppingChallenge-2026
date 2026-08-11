@@ -10,10 +10,10 @@ tensor batch of independent flights.  Among the sampled batch sizes on the
 tested Windows machine, eager CUDA did not overtake tensorized CPU execution
 until batch 4,096.
 
-The official simulator remains canonical. Phase 3 now provides a validated
-competition-specific training surrogate for Scenario 1, but its policies must
-still pass holdout transfer in the unmodified official simulator before any
-competition-performance claim.
+The official simulator remains canonical. Phase 4 now provides a GPU-native
+PPO training stack around the validated Scenario 1 surrogate, but its policies
+must still pass holdout transfer in the unmodified official simulator before
+any competition-performance claim.
 
 ## Why one balloon still runs on the CPU
 
@@ -108,12 +108,10 @@ simplified model; they are **not a speedup comparison against a
 RocketPy-equivalent model**.  The table contains medians from three seeded
 repeats; the benchmark also prints each combination's minimum and maximum.
 
-`TensorFlightBatch` now supports device-side masked reset and protects state
-from non-finite policy actions. Phase 1 adds an isolated historical 29-element
-E2E observation fixture and agent/oracle data contracts, but they are not yet
-wired into `TensorFlightBatch`. There is still no PPO rollout buffer/adapter or
-canonical dynamics and reward parity, so it is not a drop-in trainable
-environment.
+`TensorFlightBatch` supports device-side masked reset and protects state from
+non-finite policy actions. This first surrogate remains only a throughput
+microbenchmark; the canonical Scenario 1 training path is the Phase 2/3/4
+stack described below.
 
 Launch is deliberately not part of the four-action controller. A
 `LaunchPlanner` owns only launch/inclination/heading, a post-launch bootstrap
@@ -132,6 +130,15 @@ float32 run reached 88,523 transitions/s, 3.49x the matching tensor CPU
 baseline, while its combined closest-distance p99 error was 0.0125 m. See
 [PHASE2.md](PHASE2.md) for rocket parity and [PHASE3.md](PHASE3.md) for the
 balloon, dtype, transfer, and throughput gates.
+
+Phase 4 adds the sensor-only estimator/selector/handoff boundary, historical
+29-feature transform, masked running normalization, shaped training reward,
+device-resident PPO/GAE, deterministic training checkpoints, and a NumPy-only
+official deployment agent. The requested 512/1,024/2,048/4,096 by
+16/32/64/128 grid reached about 83k end-to-end transitions/s at 4,096
+environments on the tested GPU. The 1,024-step engineering run did not complete
+an episode, so it does not select a horizon or establish learning/transfer.
+See [PHASE4.md](PHASE4.md).
 
 `torch.compile(mode="reduce-overhead")` safely fell back to eager execution on
 this native Windows installation with `TritonMissing`.  A Linux/WSL2 run is a
@@ -192,6 +199,14 @@ Run the Phase 3 online-world gates and formal reports:
 .venv\Scripts\python -m experiments.cuda.benchmark_phase3 --batch-sizes 4096 --steps 8 --warmup-steps 3 --repeats 3 --output .artifacts\cuda\phase3\throughput_seed2081_b4096.json
 ```
 
+Run the Phase 4 training gates and end-to-end grid:
+
+```powershell
+.venv\Scripts\python -m pytest tests\test_cuda_phase4_training.py -q
+.venv\Scripts\python -m experiments.cuda.benchmark_phase4 --num-envs 512,1024,2048,4096 --horizons 16,32,64,128 --steps-per-env 1024 --epochs 1 --output .artifacts\cuda\phase4\grid.json
+.venv\Scripts\python -m experiments.cuda.phase4_training --num-envs 4096 --horizon 64 --updates 100 --checkpoint .artifacts\cuda\phase4\training.ckpt --deployment .artifacts\cuda\phase4\deployment.npz --deployment-agent .artifacts\cuda\phase4\submission_agent.py
+```
+
 ## Recommended implementation path
 
 1. Keep the official ActiveRocketPy environment as the scoring oracle.  For
@@ -208,10 +223,9 @@ Run the Phase 3 online-world gates and formal reports:
    two, and four substeps; trajectory and event error must stay comfortably
    below the 1.5 m pop-radius decision scale, with an explicit ambiguity band
    for boundary cases.
-4. Only then connect a device-native vectorized PPO loop.  Hundreds to
-   thousands of states, actions, observations, rewards, and rollout entries
-   should remain on one GPU.  A `SubprocVecEnv` that returns NumPy every 0.01 s
-   defeats this design.
+4. Keep the Phase 4 vectorized PPO loop device-native. Hundreds to thousands of
+   states, actions, observations, rewards, and rollout entries remain on one
+   GPU; do not insert a `SubprocVecEnv`/NumPy round trip every 0.01 s.
 5. Pretrain on the fast backend, then fine-tune and evaluate on canonical CPU
    ActiveRocketPy with Scenario 4 randomization.  Expand the port only if warm
    end-to-end rollout plus PPO update is at least roughly 2x faster and the
