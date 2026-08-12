@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tensorflight = [
+	"torch>=2.7",
+]
 dev = [
 	# Exact, not a floor. CI pins 0.15.20 and a different release disagrees about
 	# formatting, so a floating dev dependency means `make format` and CI can
@@ -32,6 +35,9 @@ dev = [
 vpython = [
 	"vpython>=7.6.5",
 ]
+
+[project.scripts]
+balloon-tensorflight = "BalloonPoppingGymEnv.tensorflight.cli:main"
 
 [tool.uv.sources]
 activerocketpy = { path = "ActiveRocketPy", editable = true }

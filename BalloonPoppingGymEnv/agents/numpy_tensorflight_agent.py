@@ -1,4 +1,4 @@
-"""NumPy-only deployment agent for a Phase 4 ``deployment.npz`` artifact."""
+"""NumPy-only official-environment agent for a TensorFlight deployment."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import numpy as np
 from BalloonPoppingGymEnv.agents.base_agent import BaseAgent
 
 
-# ``Phase4Trainer.export_self_contained_agent`` replaces this marker in a
+# ``TensorFlightTrainer.export_self_contained_agent`` replaces this marker in a
 # generated submission source. Keeping the repository template empty makes the
 # ordinary local path use the separate, inspectable deployment.npz artifact.
 EMBEDDED_DEPLOYMENT_BASE64 = ""
@@ -53,7 +53,7 @@ def _rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
     )
 
 
-class NumpyTensorFlightAgent(BaseAgent):
+class TensorFlightAgent(BaseAgent):
     """Official-observation policy with launch, bootstrap, and PPO boundaries."""
 
     def __init__(
@@ -231,3 +231,8 @@ class NumpyTensorFlightAgent(BaseAgent):
             "tvc": control[1:3].copy(),
             "throttle": float(control[3]),
         }
+
+
+# Compatibility for artifacts and local configs created before the public API
+# was promoted out of the experiment directory.
+NumpyTensorFlightAgent = TensorFlightAgent

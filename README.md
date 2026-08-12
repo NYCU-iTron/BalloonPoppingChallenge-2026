@@ -124,6 +124,19 @@ uv sync --locked   # pip users: python -m pip install -r requirements.txt
     - Open the [evaluate_scenario_colab.ipynb](./doc/examples/evaluate_scenario_colab.ipynb) notebook in Google Colab.
     - Follow the instructions in the notebook to run the evaluation in the cloud.
 
+5. GPU-native RL training with TensorFlight:
+
+    - Install the optional training dependency with `uv sync --extra tensorflight`.
+    - Train from the repository root with `uv run balloon-tensorflight train`.
+      The command writes checkpoints, `deployment.npz`, and a self-contained
+      submission agent under `runs/tensorflight`; users do not need to run files
+      from an experiment directory.
+    - Validate any deployment in the unmodified official simulator with
+      `uv run balloon-tensorflight evaluate PATH_TO_DEPLOYMENT --scenario 1`.
+    - See [TensorFlight GPU training](./doc/tensorflight_training.md) for the
+      Python API, resume/export workflow, official validation, and current
+      fidelity scope.
+
 ## Testing
 
 Run the cleanup invariant tests (uses only the Python standard library and PyYAML):
