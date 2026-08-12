@@ -140,6 +140,12 @@ environments on the tested GPU. The 1,024-step engineering run did not complete
 an episode, so it does not select a horizon or establish learning/transfer.
 See [PHASE4.md](PHASE4.md).
 
+Phase 5 repeats full-horizon balloon, rocket, lifecycle, and independent-policy
+transfer on disjoint holdout seeds. Numerical/lifecycle gates pass, but release
+remains blocked on closed-loop hit coverage. The historical alfonso agent is
+API-repairable but fails closed-loop transfer and is retained only as a
+non-release compatibility fixture. See [PHASE5.md](PHASE5.md).
+
 `torch.compile(mode="reduce-overhead")` safely fell back to eager execution on
 this native Windows installation with `TritonMissing`.  A Linux/WSL2 run is a
 separate experiment and may move the crossover through kernel fusion and CUDA
