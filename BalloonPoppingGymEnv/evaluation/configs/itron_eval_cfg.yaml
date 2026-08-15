@@ -1,0 +1,13 @@
+scenario_number: 1
+render_mode: # "matplotlib", "vpython", or null
+agent_module_path: "./BalloonPoppingGymEnv/agents/itron_agent.py" # Path to python module defining agent.
+agent_class_name: "ITronAgent" # Name of agent class defined in agent_module_path.
+agent_name: "Not RL, but still working on rl, why rl so hard?" # Identifier name for logging purposes. The same agent class with different inputs can lead to different behaviors, so you should give each instantiation their own name
+agent_kwargs:
+  visualize_selector: true
+  visualizer_kwargs:
+    update_interval: 0.25
+    pick_radius: 14
+team_name: TASTI_iTron_space
+team_secret: 73dea3aad7ba57e83abccbdfa561d19dc0e62ded2149419cf9c7eb3c7153c376
+leaderboard_submission: false
