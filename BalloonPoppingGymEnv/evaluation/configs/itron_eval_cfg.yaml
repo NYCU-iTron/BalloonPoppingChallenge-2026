@@ -2,12 +2,26 @@ scenario_number: 1
 render_mode: # "matplotlib", "vpython", or null
 agent_module_path: "./BalloonPoppingGymEnv/agents/itron_agent.py" # Path to python module defining agent.
 agent_class_name: "ITronAgent" # Name of agent class defined in agent_module_path.
-agent_name: "Not RL, but still working on rl, why rl so hard?" # Identifier name for logging purposes. The same agent class with different inputs can lead to different behaviors, so you should give each instantiation their own name
+agent_name: "Seed Zero Hero" # Identifier name for logging purposes. The same agent class with different inputs can lead to different behaviors, so you should give each instantiation their own name
 agent_kwargs:
   visualize_selector: true
   visualizer_kwargs:
     update_interval: 0.25
     pick_radius: 14
+  # Scenario 1 seed-0 qualification route. Target 40 is an unbraked corridor
+  # flyby while 83 remains committed; target 23 is popped incidentally during
+  # the final coast towards 74.
+  fixed_target_list: [75, 30, 83, 97, 21, 74, 40]
+  fixed_launch_time: 17.0
+  corridor_targets:
+    83: 40
+  corridor_guidance_weight: 1.0
+  corridor_guidance_horizon: 3.0
+  controller_kwargs:
+    loop_separation: 2.0
+    rate_command_margin: 0.70
+    direction_rate_feedforward: 0.01
+    slew_aware: false
 team_name: TASTI_iTron_space
 team_secret: 73dea3aad7ba57e83abccbdfa561d19dc0e62ded2149419cf9c7eb3c7153c376
-leaderboard_submission: false
+leaderboard_submission: true

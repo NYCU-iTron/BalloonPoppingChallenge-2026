@@ -20,7 +20,16 @@ class Controller:
     authority rather than from hand-picked constants.
     """
 
-    def __init__(self, given_parameters):
+    def __init__(
+        self,
+        given_parameters,
+        *,
+        loop_separation: float = 2.0,
+        rate_command_margin: float = 0.8,
+        integral_gain: float = 2.0,
+        direction_rate_feedforward: float = 0.0,
+        slew_aware: bool = False,
+    ):
         self.logger = logging.getLogger(__name__)
         self.given_parameters = given_parameters
         self.vehicle = Vehicle(given_parameters)
@@ -34,11 +43,14 @@ class Controller:
         # Both time constants come from the actuator rather than being picked:
         # the gimbal needs this long to cross its own range, so a rate loop
         # tuned faster than that only saturates. The outer loop is then kept
-        # three times slower for the usual cascade separation.
+        # slower for cascade separation; Scenario-specific evaluation may tune
+        # the ratio without changing the controller's general default.
         self.rate_time_constant = self.vehicle.gimbal_slew_time()
-        self.loop_separation = 2.0
+        self.loop_separation = float(loop_separation)
+        if self.loop_separation <= 0.0:
+            raise ValueError("loop_separation must be positive")
         self.attitude_time_constant = self.loop_separation * self.rate_time_constant
-        self.roll_time_constant = 0.50      # (s) roll rate damping
+        self.roll_time_constant = 0.50  # (s) roll rate damping
 
         # The rate command is capped at what the gimbal can actually build up
         # within one rate time constant, with headroom so the inner loop stays
@@ -46,18 +58,39 @@ class Controller:
         # own saturation threshold of 1.28 rad/s, so every large attitude change
         # drove the actuator straight onto its stop and the loop lost control
         # authority exactly when it was turning hardest.
-        self.rate_command_margin = 0.8
+        self.rate_command_margin = float(rate_command_margin)
+        if self.rate_command_margin <= 0.0:
+            raise ValueError("rate_command_margin must be positive")
 
         # Integral trim on the rate loop, in gimbal degrees. Sized as a fraction
         # of real authority so it can actually correct a standing bias -- the
         # previous limits let it contribute 0.025 of the 15 available degrees.
-        self.integral_gain = 2.0
+        self.integral_gain = float(integral_gain)
+        if self.integral_gain < 0.0:
+            raise ValueError("integral_gain must not be negative")
         self.max_integral_gimbal = 0.3 * self.vehicle.max_gimbal
 
+        # Feed forward motion of the guidance command itself. The original
+        # loop reacts only after pointing error appears, which is costly when
+        # corridor guidance rotates the thrust direction through two corners
+        # in a few seconds. Zero preserves the established controller exactly.
+        self.direction_rate_feedforward = float(direction_rate_feedforward)
+        if not 0.0 <= self.direction_rate_feedforward <= 1.0:
+            raise ValueError("direction_rate_feedforward must be between 0 and 1")
+
+        # When enabled, issue only commands the actuator can realise on this
+        # timestep. The simulator applies the same per-axis rate limit; doing it
+        # here makes the controller's remembered command equal the real gimbal.
+        self.slew_aware = bool(slew_aware)
+
         self.integral_error = np.zeros(2)
+        self.previous_desired_dir_world = None
+        self.commanded_tvc = np.zeros(2)
 
     def reset(self):
         self.integral_error = np.zeros(2)
+        self.previous_desired_dir_world = None
+        self.commanded_tvc = np.zeros(2)
 
     def compute(
         self,
@@ -114,10 +147,16 @@ class Controller:
             return np.zeros(2), 0.0, self.vehicle.throttle_min
         desired_dir_world = desired_dir_world / norm
 
+        desired_direction_rate_world = self._desired_direction_rate(desired_dir_world)
+
         qw, qx, qy, qz = rocket_quat
         q_vec = np.array([qx, qy, qz])
         t = 2.0 * np.cross(-q_vec, desired_dir_world)
         desired_dir_body = desired_dir_world + qw * t + np.cross(-q_vec, t)
+        rate_t = 2.0 * np.cross(-q_vec, desired_direction_rate_world)
+        desired_direction_rate_body = (
+            desired_direction_rate_world + qw * rate_t + np.cross(-q_vec, rate_t)
+        )
 
         # 2. Pointing error: the rotation carrying body z onto the desired
         #    direction. Body z is the thrust axis.
@@ -137,10 +176,18 @@ class Controller:
             * self.rate_time_constant
         )
         rate_magnitude = min(angle / self.attitude_time_constant, max_body_rate)
-        desired_rates = np.array([
-            rate_magnitude * rot_axis[0],  # pitch (wx)
-            rate_magnitude * rot_axis[1],  # yaw   (wy)
-        ])
+        desired_rates = np.array(
+            [
+                rate_magnitude * rot_axis[0],  # pitch (wx)
+                rate_magnitude * rot_axis[1],  # yaw   (wy)
+            ]
+        )
+        desired_rates += (
+            self.direction_rate_feedforward * desired_direction_rate_body[:2]
+        )
+        desired_rate_norm = float(np.linalg.norm(desired_rates))
+        if desired_rate_norm > max_body_rate:
+            desired_rates *= max_body_rate / desired_rate_norm
 
         # 4. Inner loop: rate error -> gimbal. The proportional gain is whatever
         #    it takes to correct the error within one rate time constant given
@@ -150,7 +197,9 @@ class Controller:
 
         self.integral_error += error * self.dt
         integral_limit = self.max_integral_gimbal / max(self.integral_gain, 1e-9)
-        self.integral_error = np.clip(self.integral_error, -integral_limit, integral_limit)
+        self.integral_error = np.clip(
+            self.integral_error, -integral_limit, integral_limit
+        )
 
         raw_tvc = kp * error + self.integral_gain * self.integral_error
 
@@ -163,6 +212,11 @@ class Controller:
             raw_tvc = raw_tvc * scale
             # Anti-windup: stop integrating once the actuator is on its stop.
             self.integral_error *= scale
+
+        if self.slew_aware:
+            raw_tvc = self._limit_gimbal_slew(raw_tvc)
+        else:
+            self.commanded_tvc = raw_tvc.copy()
 
         # 6. Roll: no roll command is needed, so damp the rate to zero.
         roll_gain = self.vehicle.roll_inertia / self.roll_time_constant
@@ -179,3 +233,33 @@ class Controller:
         )
 
         return raw_tvc, roll, throttle
+
+    def _desired_direction_rate(self, desired_dir_world: np.ndarray) -> np.ndarray:
+        """Angular velocity carrying the previous guidance direction here."""
+        previous = self.previous_desired_dir_world
+        self.previous_desired_dir_world = desired_dir_world.copy()
+        if previous is None or self.direction_rate_feedforward <= 0.0:
+            return np.zeros(3)
+
+        cross = np.cross(previous, desired_dir_world)
+        sin_angle = float(np.linalg.norm(cross))
+        cos_angle = float(np.clip(np.dot(previous, desired_dir_world), -1.0, 1.0))
+        if sin_angle < 1e-12:
+            return np.zeros(3)
+        angle = float(np.arctan2(sin_angle, cos_angle))
+        return cross * (angle / (sin_angle * self.dt))
+
+    def _limit_gimbal_slew(self, requested_tvc: np.ndarray) -> np.ndarray:
+        """Mirror the simulator's independent per-axis gimbal rate limit."""
+        max_change = self.vehicle.gimbal_rate_limit * self.dt
+        change = np.clip(
+            np.asarray(requested_tvc, dtype=float) - self.commanded_tvc,
+            -max_change,
+            max_change,
+        )
+        limited = self.commanded_tvc + change
+        if not np.allclose(limited, requested_tvc):
+            # The actuator cannot realise the integral contribution yet.
+            self.integral_error *= 0.95
+        self.commanded_tvc = limited
+        return limited

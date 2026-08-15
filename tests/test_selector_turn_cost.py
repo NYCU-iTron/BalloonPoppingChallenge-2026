@@ -31,6 +31,34 @@ class TestSelectorTurnCost(unittest.TestCase):
 
         self.assertEqual(selector.select_targets_beam(states), [0, 1])
 
+    def test_ranked_beam_candidates_keep_alternatives_without_changing_best(self):
+        selector = Selector.__new__(Selector)
+        selector.logger = logging.getLogger(__name__)
+        selector.vehicle = _ConstantSpeedVehicle()
+        selector.time_budget_fraction = 1.0
+        selector.pad_origin = np.zeros(3)
+        selector.time_weight = 1.0
+        selector.angle_weight = 1.0
+        selector.target_reward = 3_000.0
+        selector.short_turn_recovery_factor = 2.0
+        selector.max_segment_dist = 1_000.0
+        selector.too_far_weight = 0.0
+        selector.beam_width = 20
+        selector.max_chain_length = 2
+        states = np.array(
+            [
+                [10.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [12.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [15.0, -1.0, 0.0, 0.0, 0.0, 0.0],
+            ]
+        )
+
+        ranked = selector.rank_target_chains_beam(states, limit=3)
+
+        self.assertEqual(ranked[0][1], selector.select_targets_beam(states))
+        self.assertEqual(len(ranked), 3)
+        self.assertEqual(len({tuple(chain) for _utility, chain in ranked}), 3)
+
     def test_turn_time_is_used_when_predicting_moving_target_position(self):
         selector = Selector.__new__(Selector)
         selector.vehicle = _MovingTargetVehicle()

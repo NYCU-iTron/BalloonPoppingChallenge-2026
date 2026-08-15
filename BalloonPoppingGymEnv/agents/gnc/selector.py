@@ -570,6 +570,37 @@ class Selector:
         time_budget: float | None = None,
         t_since_launch: float = 0.0,
     ) -> list[int] | None:
+        """Return the highest-ranked chain from the beam search."""
+        ranked = self.rank_target_chains_beam(
+            balloon_states,
+            origin=origin,
+            incoming_dir=incoming_dir,
+            incoming_velocity=incoming_velocity,
+            time_budget=time_budget,
+            t_since_launch=t_since_launch,
+            limit=1,
+        )
+        if not ranked:
+            return None
+
+        utility, chain = ranked[0]
+        self.logger.info(
+            f"Beam chain of {len(chain)} within the flight budget: "
+            f"{chain} (utility {utility:.1f})"
+        )
+        return chain
+
+    def rank_target_chains_beam(
+        self,
+        balloon_states: np.ndarray,
+        origin: np.ndarray | None = None,
+        incoming_dir: np.ndarray | None = None,
+        incoming_velocity: np.ndarray | None = None,
+        time_budget: float | None = None,
+        t_since_launch: float = 0.0,
+        *,
+        limit: int = 10,
+    ) -> list[tuple[float, list[int]]]:
         """Chain search carried out in the rocket's own frame, with no plume axis.
 
         The axis-based search sorts balloons along a fitted plume direction and
@@ -590,7 +621,13 @@ class Selector:
 
         Acyclicity comes for free: every leg costs time and the budget only
         shrinks, so no chain can revisit a balloon.
+
+        Returns up to ``limit`` distinct ``(utility, chain)`` pairs. Keeping
+        alternatives is development-only support for closed-loop route trials;
+        :meth:`select_targets_beam` still chooses exactly the first entry.
         """
+        if limit < 1:
+            raise ValueError("limit must be at least one")
         if time_budget is None:
             time_budget = self.vehicle.burn_time * self.time_budget_fraction
 
@@ -600,7 +637,7 @@ class Selector:
 
         valid = np.where(~np.isnan(balloon_states[:, 0]))[0]
         if valid.size == 0:
-            return None
+            return []
 
         candidates = [
             {
@@ -622,8 +659,7 @@ class Selector:
         else:
             start_velocity = None
         beam = [(0.0, 0.0, np.zeros(3), start_velocity, ())]
-        best_chain: tuple[int, ...] = ()
-        best_utility = float("inf")
+        ranked: list[tuple[float, tuple[int, ...]]] = []
 
         for _ in range(self.max_chain_length):
             expanded = []
@@ -672,19 +708,64 @@ class Selector:
 
             expanded.sort(key=lambda e: e[0])
             beam = expanded[: self.beam_width]
+            ranked.extend(
+                (entry[0] - self.target_reward * len(entry[4]), entry[4])
+                for entry in beam
+            )
 
-            utility = beam[0][0] - self.target_reward * len(beam[0][4])
-            if utility < best_utility:
-                best_chain, best_utility = beam[0][4], utility
+        ranked.sort(key=lambda item: item[0])
+        unique = []
+        seen = set()
+        for utility, chain in ranked:
+            if chain in seen:
+                continue
+            seen.add(chain)
+            unique.append((utility, list(chain)))
+            if len(unique) >= limit:
+                break
+        return unique
 
-        if not best_chain:
-            return None
+    def candidate_chains(
+        self,
+        balloon_states: np.ndarray,
+        *,
+        limit_per_model: int = 10,
+        **kwargs,
+    ) -> list[list[int]]:
+        """Return diverse permissive and conservative routes for simulation."""
+        if not self.use_beam_search:
+            route = self.select_targets(balloon_states, **kwargs)
+            return [route] if route else []
 
-        self.logger.info(
-            f"Beam chain of {len(best_chain)} within a {time_budget:.1f} s budget: "
-            f"{list(best_chain)} (utility {best_utility:.1f})"
-        )
-        return list(best_chain)
+        original_factor = self.short_turn_recovery_factor
+        try:
+            self.short_turn_recovery_factor = (
+                self.conservative_short_turn_recovery_factor
+            )
+            conservative = self.rank_target_chains_beam(
+                balloon_states, limit=limit_per_model, **kwargs
+            )
+
+            self.short_turn_recovery_factor = original_factor
+            permissive = self.rank_target_chains_beam(
+                balloon_states, limit=limit_per_model, **kwargs
+            )
+        finally:
+            self.short_turn_recovery_factor = original_factor
+
+        # Alternate the two models instead of sorting their utilities together:
+        # the conservative model intentionally uses a different cost scale.
+        routes = []
+        seen = set()
+        for rank in range(max(len(conservative), len(permissive))):
+            for ranked in (conservative, permissive):
+                if rank >= len(ranked):
+                    continue
+                chain = tuple(ranked[rank][1])
+                if chain not in seen:
+                    seen.add(chain)
+                    routes.append(list(chain))
+        return routes
 
     def plan_chain(self, balloon_states: np.ndarray, **kwargs) -> list[int] | None:
         """Plan with both permissive and conservative short-turn models.

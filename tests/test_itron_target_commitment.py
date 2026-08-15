@@ -8,6 +8,40 @@ from BalloonPoppingGymEnv.agents.itron_agent import ITronAgent
 
 
 class TestITronTargetCommitment(unittest.TestCase):
+    def test_fixed_route_waits_for_launch_time_and_every_target_release(self):
+        agent = ITronAgent.__new__(ITronAgent)
+        agent.fixed_target_list = (1, 2)
+        agent.fixed_launch_time = 10.0
+
+        too_early = {
+            "simulation_time": 9.99,
+            "balloon_status": np.array([[1], [1], [1]]),
+        }
+        unreleased = {
+            "simulation_time": 10.0,
+            "balloon_status": np.array([[1], [1], [0]]),
+        }
+        ready = {
+            "simulation_time": 10.0,
+            "balloon_status": np.array([[1], [1], [1]]),
+        }
+
+        self.assertFalse(agent._fixed_route_is_ready(too_early))
+        self.assertFalse(agent._fixed_route_is_ready(unreleased))
+        self.assertTrue(agent._fixed_route_is_ready(ready))
+
+    def test_fixed_route_rejects_an_out_of_range_target(self):
+        agent = ITronAgent.__new__(ITronAgent)
+        agent.fixed_target_list = (3,)
+        agent.fixed_launch_time = 0.0
+        observation = {
+            "simulation_time": 0.0,
+            "balloon_status": np.ones((3, 1), dtype=int),
+        }
+
+        with self.assertRaisesRegex(ValueError, "outside"):
+            agent._fixed_route_is_ready(observation)
+
     def test_active_target_is_never_skipped(self):
         agent = ITronAgent.__new__(ITronAgent)
         agent.selector = Selector.__new__(Selector)

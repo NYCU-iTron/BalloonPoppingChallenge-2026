@@ -1,0 +1,93 @@
+# Persistent notes for Scenario 1 route optimization. This file records search
+# results; it is not loaded by the competition agent at runtime.
+scenario: 1
+seed: 0
+objective_score: 7
+
+best_achieved:
+  planned_targets: [75, 30, 83, 97, 21, 74, 40]
+  actual_popped: [75, 30, 40, 83, 97, 21, 23]
+  pop_times: [23.95, 27.32, 33.21, 35.43, 38.76, 46.3, 49.51]
+  score: 7
+  launch_time: 17.0
+  corridor:
+    committed_target: 83
+    flyby_target: 40
+    weight: 1.0
+    horizon: 3.0
+  controller:
+    loop_separation: 2.0
+    rate_command_margin: 0.70
+    direction_rate_feedforward: 0.01
+    slew_aware: false
+  verification_runs: 3
+  verified_with_official_evaluator: true
+  alternate_controller_success:
+    rate_command_margin: 0.71
+    direction_rate_feedforward: 0.012
+  sensitivity: >-
+    The seventh balloon is an incidental coast-through of target 23. Launches
+    at 16.98 or 17.02 seconds score six, so retain the exact 17.00-second phase.
+
+best_candidate:
+  targets: [75, 30, 83, 97, 21, 74, 40]
+  launch_time: 16.55
+  popped: [75, 30, 83, 97, 21, 74]
+  score: 6
+  last_pop_time: 43.89
+  status: seventh_target_not_yet_reached
+
+# Launching at 17.00 s produces the closest observed incidental pass of #40.
+# It is therefore the preferred baseline for navigator path-shaping experiments,
+# despite finishing the six confirmed targets slightly later.
+navigator_baseline:
+  targets: [75, 30, 83, 97, 21, 74, 40]
+  launch_time: 17.0
+  popped: [75, 30, 83, 97, 21, 74]
+  pop_times: [23.95, 27.32, 33.77, 36.24, 41.64, 44.12]
+  opportunistic_target: 40
+  opportunistic_leg: [30, 83]
+  closest_approach_time: 32.75
+  closest_approach_distance: 6.274
+  balloon_radius: 1.5
+  required_path_shift: 4.774
+
+notes:
+  - Directly inserting target 40 pops it, but delays the remaining route and scores only 5.
+  - Keep target 83 committed while testing a bounded path bias toward target 40.
+  - Fixed-sequence replacement and pair-permutation searches have not exceeded 6.
+
+lookahead_guidance_experiment:
+  method: terminal_velocity_towards_next_planned_target
+  default_enabled: false
+  tested_weights: [0.0, 0.025, 0.05, 0.1, 0.2, 0.35]
+  best_weight: 0.05
+  best_launch_time: 16.9
+  popped: [75, 30, 83, 97, 21, 74]
+  score: 6
+  last_pop_time: 43.79
+  closest_approach_to_40: 7.055
+  sweep_closest_approach_to_40: 6.88
+  sweep_closest_launch_time: 17.4
+  sweep_closest_score: 5
+  conclusion: >-
+    Following only the next planned target can shorten the six-target run, but
+    moves the trajectory away from opportunistic target 40 and is less robust
+    to launch phase. Keep disabled while testing multi-target corridor guidance.
+
+corridor_guidance_experiment:
+  method: unbraked_zem_flyby_without_retargeting
+  default_enabled: false
+  committed_target: 83
+  flyby_target: 40
+  launch_time: 17.0
+  corridor_weight: 1.0
+  corridor_horizon: 3.0
+  popped: [75, 30, 40, 83, 97, 21]
+  pop_times: [23.95, 27.32, 33.11, 35.65, 39.4, 46.44]
+  score: 6
+  conclusion: >-
+    The navigator can pop target 40 opportunistically while target 83 remains
+    committed, but the flyby delays targets 83 and 97 enough to lose target 74.
+    Launch-phase and next-target-lookahead sweeps did not reach seven. The next
+    bottleneck is fast controller tracking through the 40-to-83-to-97 turns.

@@ -30,7 +30,6 @@ def run_for_development():
 
     # Sample tracks from the pool
     num_balloons = scenario_parameters["balloon"]["num"]
-    scenario_parameters["scenario"]["random_seed"] = 10
     rng = np.random.default_rng(scenario_parameters["scenario"]["random_seed"])
     sampled_indices = rng.choice(pool_capacity, size=num_balloons, replace=False)
     extracted_tracks = np.array(trajectory_database[sampled_indices])

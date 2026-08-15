@@ -30,7 +30,57 @@ class ITronAgent(BaseAgent):
         self.estimator = Estimator(self.given_parameters)
         self.selector = Selector(self.given_parameters)
         self.navigator = Navigator(self.given_parameters)
-        self.controller = Controller(self.given_parameters)
+        self.controller = Controller(
+            self.given_parameters, **dict(kwargs.get("controller_kwargs", {}))
+        )
+
+        self.lookahead_guidance_weight = float(
+            kwargs.get("lookahead_guidance_weight", 0.0)
+        )
+        if not 0.0 <= self.lookahead_guidance_weight <= 1.0:
+            raise ValueError("lookahead_guidance_weight must be between 0 and 1")
+
+        corridor_targets = kwargs.get("corridor_targets", {})
+        self.corridor_targets = {
+            int(committed): int(flyby)
+            for committed, flyby in dict(corridor_targets).items()
+        }
+        self.corridor_guidance_weight = float(
+            kwargs.get("corridor_guidance_weight", 0.0)
+        )
+        if not 0.0 <= self.corridor_guidance_weight <= 1.0:
+            raise ValueError("corridor_guidance_weight must be between 0 and 1")
+        self.corridor_guidance_horizon = float(
+            kwargs.get("corridor_guidance_horizon", 0.0)
+        )
+        if self.corridor_guidance_horizon < 0.0:
+            raise ValueError("corridor_guidance_horizon must not be negative")
+        if any(
+            committed == flyby for committed, flyby in self.corridor_targets.items()
+        ):
+            raise ValueError("a corridor target must differ from its committed target")
+
+        fixed_targets = kwargs.get("fixed_target_list")
+        fixed_launch_time = kwargs.get("fixed_launch_time")
+        if (fixed_targets is None) != (fixed_launch_time is None):
+            raise ValueError(
+                "fixed_target_list and fixed_launch_time must be provided together"
+            )
+        self.fixed_target_list = None
+        self.fixed_launch_time = None
+        if fixed_targets is not None:
+            route = tuple(int(target) for target in fixed_targets)
+            if not route:
+                raise ValueError("fixed_target_list must not be empty")
+            if any(target < 0 for target in route):
+                raise ValueError("fixed target indices must be non-negative")
+            if len(set(route)) != len(route):
+                raise ValueError("fixed_target_list must not contain duplicates")
+            if float(fixed_launch_time) < 0.0:
+                raise ValueError("fixed_launch_time must be non-negative")
+            self.fixed_target_list = route
+            self.fixed_launch_time = float(fixed_launch_time)
+
         self.target_visualizer = None
         if kwargs.get("visualize_selector", False):
             visualizer_kwargs = kwargs.get("visualizer_kwargs", {})
@@ -59,6 +109,9 @@ class ITronAgent(BaseAgent):
         # raised the mean score from 4.2 to 4.6 and reduced approach-away events
         # from 4.0 to 2.0 per run.
         self.reselect_after_hit = True
+        if self.fixed_target_list is not None:
+            self.replan_after_hit = False
+            self.reselect_after_hit = False
 
         self.should_launch = False
         self.launch_inclination_heading = None
@@ -89,7 +142,10 @@ class ITronAgent(BaseAgent):
 
         # Not launch
         if not self.should_launch:
-            self.should_launch = self.selector.should_launch(observation)
+            if self.fixed_target_list is not None:
+                self.should_launch = self._fixed_route_is_ready(observation)
+            else:
+                self.should_launch = self.selector.should_launch(observation)
 
             # Still not launch
             if not self.should_launch:
@@ -99,10 +155,13 @@ class ITronAgent(BaseAgent):
             # Run only once after should_launch become true. The selector
             # already searched a chain while deciding to go, so reuse it.
             balloon_states = self.selector.active_states(observation)
-            self.target_idx_list = (
-                self.selector.pending_targets
-                or self.selector.plan_chain(balloon_states)
-            )
+            if self.fixed_target_list is not None:
+                self.target_idx_list = list(self.fixed_target_list)
+            else:
+                self.target_idx_list = (
+                    self.selector.pending_targets
+                    or self.selector.plan_chain(balloon_states)
+                )
 
             # No feasible target set: stay on the pad rather than launching blind.
             if not self.target_idx_list:
@@ -150,7 +209,11 @@ class ITronAgent(BaseAgent):
         # Chain flown to the end. Any burn still left is worth another chain, and
         # planning here costs nothing that was already committed -- unlike
         # replanning mid-approach, there is no target being flown at to abandon.
-        if balloon_idx is None and self.selector.remaining_budget(t_since_launch) > 0.0:
+        if (
+            self.fixed_target_list is None
+            and balloon_idx is None
+            and self.selector.remaining_budget(t_since_launch) > 0.0
+        ):
             self._replan_from_here(observation, rocket_state, t_since_launch)
             balloon_idx = self._current_target(observation)
 
@@ -168,6 +231,22 @@ class ITronAgent(BaseAgent):
         # Current target state, not a lead one: the guidance law does its own
         # extrapolation over its time-to-go, so leading here would double it.
         target_state = self.estimator.estimate_target(observation, balloon_idx)
+        next_target_state = None
+        next_position = self.current_target_idx + 1
+        if next_position < len(self.target_idx_list):
+            next_idx = self.target_idx_list[next_position]
+            if not self.selector.check_target_popped(next_idx, observation):
+                next_target_state = self.estimator.estimate_target(
+                    observation, next_idx
+                )
+        corridor_target_state = None
+        corridor_idx = self.corridor_targets.get(balloon_idx)
+        if corridor_idx is not None and not self.selector.check_target_popped(
+            corridor_idx, observation
+        ):
+            corridor_target_state = self.estimator.estimate_target(
+                observation, corridor_idx
+            )
         self._start_engagement_prediction(
             balloon_idx,
             target_state,
@@ -178,7 +257,14 @@ class ITronAgent(BaseAgent):
         self._update_target_visualizer(observation, balloon_idx)
 
         thrust_dir, desired_throttle = self.navigator.compute(
-            target_state, rocket_state, t_since_launch
+            target_state,
+            rocket_state,
+            t_since_launch,
+            next_target_state=next_target_state,
+            lookahead_weight=self.lookahead_guidance_weight,
+            corridor_target_state=corridor_target_state,
+            corridor_weight=self.corridor_guidance_weight,
+            corridor_horizon=self.corridor_guidance_horizon,
         )
         tvc, roll, throttle = self.controller.compute(
             rocket_state, thrust_dir, desired_throttle, t_since_launch
@@ -191,6 +277,27 @@ class ITronAgent(BaseAgent):
             "roll": roll,
             "throttle": throttle,
         }
+
+    def _fixed_route_is_ready(self, observation: dict) -> bool:
+        """Whether a configured route can launch without targeting the ground."""
+        if self.fixed_target_list is None:
+            return False
+
+        simulation_time = float(observation[Schema.Observation.SIMULATION_TIME])
+        if simulation_time < self.fixed_launch_time:
+            return False
+
+        status = np.asarray(
+            observation[Schema.Observation.BALLOON_STATUS], dtype=int
+        ).reshape(-1)
+        if any(target >= len(status) for target in self.fixed_target_list):
+            raise ValueError(
+                f"fixed_target_list contains an index outside 0..{len(status) - 1}"
+            )
+
+        # A fixed sequence must be fully observable when committed. Otherwise
+        # guidance would steer towards a balloon's rail position before release.
+        return all(status[target] == 1 for target in self.fixed_target_list)
 
     def _update_target_visualizer(
         self, observation: dict, current_target: int | None = None
